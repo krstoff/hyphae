@@ -7,8 +7,10 @@ packer {
   }
 }
 
+variable "commit-id" {}
+
 source "amazon-ebs" "ubuntu" {
-  ami_name      = "hyphae-node-${formatdate("YYYY-MM-DD-hhmmss", timestamp())}"
+  ami_name      = "hyphae-node-${var.commit-id}"
   instance_type = "t3.micro"
   region        = "us-west-1"
   source_ami_filter {
