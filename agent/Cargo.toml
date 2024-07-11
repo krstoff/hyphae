@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-containerd-client = "0.5.0"
+containerd-client = { path = "../../rust-extensions/crates/client" }
 tokio = { version = "*", features = ["macros", "rt-multi-thread"] }
+prost-types = "*"
