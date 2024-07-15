@@ -1,83 +1,103 @@
-use containerd_client::connect;
-use containerd_client::services::v1::{
-    namespaces_client::NamespacesClient,
-    images_client::ImagesClient,
-    transfer_client::TransferClient,
-    CreateNamespaceRequest,
-    Namespace,
-    TransferRequest,
-};
-use containerd_client::types::v1::transfer::UnpackConfiguration;
-use containerd_client::types::v1::{
-    transfer::ImageStore,
-    transfer::OciRegistry,
-};
-use containerd_client::types::{
-    Platform,
-};
-use containerd_client::with_namespace;
-use containerd_client::tonic;
-use tonic::Request;
+use k8s_cri::v1::{self as cri, LinuxContainerResources, LinuxSandboxSecurityContext};
+use cri::image_service_client::ImageServiceClient;
+use cri::runtime_service_client::RuntimeServiceClient;
+use tonic::transport::Channel;
+use std::collections::HashMap;
 
-static IMAGE_REFERENCE: &'static str = "docker.io/library/nginx:latest";
-
-async fn initialize_namespace(channel: &mut tonic::transport::Channel) {
-    let mut client = NamespacesClient::new(channel);
-    let resp = client.create(CreateNamespaceRequest {
-        namespace: Some(Namespace { name: "hyphae-agent-test".to_owned(), labels: Default::default()})
-    }).await;
-    match resp {
-        Ok(_) => println!("Created namespace."),
-        Err(_) => println!("Namespace already existed.")
-    }
+async fn connect_uds(path: String) -> Result<tonic::transport::Channel, tonic::transport::Error> {
+    tonic::transport::Endpoint::try_from("http://[::]:50051")
+    .unwrap()
+    .connect_with_connector(
+        tower::service_fn(move |_| {
+            tokio::net::UnixStream::connect(path.clone())
+        })
+    ).await
 }
 
-async fn pull_image(channel: &mut tonic::transport::Channel) {
-    let registry = OciRegistry {
-        reference: IMAGE_REFERENCE.to_owned(),
-        resolver: None,
-    };
-    let image_store = ImageStore {
-        name: "nginx".to_owned(),
-        labels: Default::default(),
-        platforms: vec![
-            Platform {
-                architecture: "amd64".to_owned(),
-                os: "linux".to_owned(),
-                variant: "".to_owned(),
-            }
-        ],
-        all_metadata: false,
-        manifest_limit: 0,
-        extra_references: Default::default(),
-        unpacks: vec!(UnpackConfiguration {
-            platform: Some(Platform {
-                architecture: "amd64".to_owned(),
-                os: "linux".to_owned(),
-                variant: "".to_owned(),
-            }),
-            snapshotter: "".to_owned(),
+struct SandBoxConfig {
+    name: String,
+    uid: String,
+    resources: Option<cri::LinuxContainerResources>,
+    namespace: String,
+}
+
+async fn pull_image(isc: &mut ImageServiceClient<Channel>, name: String) -> cri::PullImageResponse {
+    isc.pull_image(cri::PullImageRequest{
+        image: Some(cri:: ImageSpec {
+            image: name,
+            annotations: Default::default()
         }),
+        auth: None,
+        sandbox_config: None,
+    })
+        .await
+        .expect("Could not pull image")
+        .into_inner()
+}
+
+async fn create_sandbox(rsc: &mut RuntimeServiceClient<Channel>, config: SandBoxConfig) -> cri::RunPodSandboxResponse {
+    let metadata = cri::PodSandboxMetadata {
+        name: config.name.clone(),
+        uid: config.uid,
+        namespace: config.namespace,
+        attempt: 0,
     };
-    let mut client = TransferClient::new(channel);
-    let mut src = prost_types::Any::from_msg(&registry).unwrap();
-    let mut dst = prost_types::Any::from_msg(&image_store).unwrap();
-    // containerd not registering compliant type-urls, have to trim leading slash...
-    src.type_url = src.type_url[1..].to_owned();
-    dst.type_url = dst.type_url[1..].to_owned();
-    let req = TransferRequest {
-        source: Some(src),
-        destination: Some(dst),
-        options: None
+    let sandbox_labels = HashMap::from([
+        ("name".to_owned(), config.name.clone()),
+    ]);
+    let linux_options = cri::LinuxPodSandboxConfig {
+        cgroup_parent: "".to_owned(),
+        resources: config.resources,
+        security_context: Some(cri::LinuxSandboxSecurityContext {
+            namespace_options: Some(cri::NamespaceOption {
+                network: cri::NamespaceMode::Node.into(),
+                ..Default::default()
+            }),
+            ..Default::default()   
+        }),
+        overhead: None,
+        sysctls: HashMap::new(),
     };
-    let req = with_namespace!(req, "default");
-    let resp = client.transfer(req).await.unwrap();
+    let config = cri::PodSandboxConfig {
+        metadata: Some(metadata),
+        labels: sandbox_labels,
+        linux: Some(linux_options),
+        hostname: String::new(),
+        dns_config: None,
+        log_directory: String::new(),
+        port_mappings: vec![],
+        annotations: HashMap::new(),
+        windows: None,
+    };
+    let request = cri::RunPodSandboxRequest {
+        config: Some(config),
+        runtime_handler: String::new(),
+    };
+    return rsc.run_pod_sandbox(request)
+        .await
+        .expect("Sandbox creation failed")
+        .into_inner();
 }
 
 #[tokio::main]
 async fn main() {
-    // Launch containerd at /run/containerd/containerd.sock
-    let mut channel = connect("/run/containerd/containerd.sock").await.unwrap();
-    initialize_namespace(&mut channel).await;
-    pull_image(&mut channel).await;
+    let channel = connect_uds("/run/containerd/containerd.sock".to_owned()).await.expect("Could not connect to containerd");
+    let mut image_service = ImageServiceClient::new(channel.clone());
+    let image_name = "docker.io/library/nginx:latest".to_owned();
+    let pull_image_response = pull_image(&mut image_service, image_name).await;
+    println!("{:?}", &pull_image_response);
+
+    fn make_uid() -> String {
+        return "testuid".to_owned();
+    }
+    let uid = make_uid();
+    let mut runtime_service = RuntimeServiceClient::new(channel);
+    let config = SandBoxConfig {
+        name: "nginx".to_owned(),
+        uid: uid,
+        namespace: "default".to_owned(),
+        resources: None,
+    };
+    let create_sandbox_response = create_sandbox(&mut runtime_service, config).await;
+    println!("{:?}", &create_sandbox_response);
 }
