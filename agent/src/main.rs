@@ -46,6 +46,6 @@ async fn main() {
         envs: vec![],
         privileged: false
     };
-    let create_container_response = create_container(&mut runtime_service, container_config, podsandbox_config).await;
-    println!("{:?}", &create_container_response);
+    let run_container_response = run_container(&mut runtime_service, container_config, podsandbox_config).await;
+    println!("{:?}", &run_container_response);
 }

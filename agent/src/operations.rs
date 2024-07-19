@@ -80,7 +80,9 @@ pub struct ContainerConfig {
     pub privileged: bool,
 }
 
-pub async fn create_container(rsc: &mut RuntimeServiceClient<Channel>, config: ContainerConfig, sandbox_config: cri::PodSandboxConfig) -> cri::CreateContainerResponse {
+pub async fn run_container(rsc: &mut RuntimeServiceClient<Channel>, config: ContainerConfig, sandbox_config: cri::PodSandboxConfig)
+    -> cri::StartContainerResponse
+{
     let container_labels = HashMap::from([
         ("name".to_owned(), config.name.clone()),
     ]);
@@ -121,13 +123,23 @@ pub async fn create_container(rsc: &mut RuntimeServiceClient<Channel>, config: C
         devices: vec![],
         windows: None,
     };
-    let request = cri::CreateContainerRequest {
+    let create_request = cri::CreateContainerRequest {
         pod_sandbox_id: config.pod_sandbox_id,
         config: Some(cri_container_config),
         sandbox_config: Some(sandbox_config),
     };
-    return rsc.create_container(request)
+    
+    let create_resp = rsc.create_container(create_request)
         .await
         .expect("Container creation failed")
         .into_inner();
+
+    // Start the container
+    let start_request = cri::StartContainerRequest { container_id: create_resp.container_id };
+    let start_resp = rsc.start_container(start_request)
+        .await
+        .expect("Container start failed")
+        .into_inner();
+
+    return start_resp;
 }
