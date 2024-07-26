@@ -1,8 +1,16 @@
+mod operations;
+mod state;
+#[cfg(test)]
+mod tests;
+
 use k8s_cri::v1 as cri;
 use cri::image_service_client::ImageServiceClient;
 use cri::runtime_service_client::RuntimeServiceClient;
-mod operations;
+
+use std::sync::{Arc, Mutex};
+
 use operations::*;
+use state::*;
 
 async fn connect_uds(path: String) -> Result<tonic::transport::Channel, tonic::transport::Error> {
     tonic::transport::Endpoint::try_from("http://[::]:50051")
@@ -14,38 +22,31 @@ async fn connect_uds(path: String) -> Result<tonic::transport::Channel, tonic::t
     ).await
 }
 
+async fn read_events(mut runtime_service: RuntimeServiceClient<tonic::transport::Channel>, runtime_state: Arc<Mutex<State>>) {
+    loop {
+        let mut events_resp = runtime_service.get_container_events(cri::GetEventsRequest{})
+            .await
+            .expect("Could not get event stream")
+            .into_inner();
+        while let Ok(Some(message)) = events_resp.message().await {
+            runtime_state.lock().unwrap().process_message(message);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let channel = connect_uds("/run/containerd/containerd.sock".to_owned()).await.expect("Could not connect to containerd");
-    let mut image_service = ImageServiceClient::new(channel.clone());
-    let image_name = "docker.io/library/nginx:latest".to_owned();
-    let pull_image_response = pull_image(&mut image_service, image_name).await;
-    println!("{:?}", &pull_image_response);
+    let mut runtime_service = RuntimeServiceClient::new(channel.clone());
 
-    fn make_uid() -> String {
-        return "testuid".to_owned();
+    let runtime_state = State::new();
+
+    let events_process = tokio::spawn(read_events(runtime_service, runtime_state));
+    // let containers = list_containers(&mut runtime_service).await.containers;
+    // runtime_state.lock().unwrap().observe(containers);
+    events_process.await;
+    
+    loop {
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
     }
-    let uid = make_uid();
-    let mut runtime_service = RuntimeServiceClient::new(channel);
-    let sandbox_config = SandBoxConfig {
-        name: "nginx".to_owned(),
-        uid: uid,
-        namespace: "default".to_owned(),
-        resources: None,
-    };
-    let (create_sandbox_response, podsandbox_config) = create_sandbox(&mut runtime_service, sandbox_config).await;
-    println!("{:?}", &create_sandbox_response);
-
-    let container_config = ContainerConfig {
-        pod_sandbox_id: create_sandbox_response.pod_sandbox_id.clone(),
-        name: "nginx".to_owned(),
-        image: pull_image_response.image_ref.clone(),
-        command: "nginx".to_owned(),
-        args: vec![],
-        working_dir: "".to_owned(),
-        envs: vec![],
-        privileged: false
-    };
-    let run_container_response = run_container(&mut runtime_service, container_config, podsandbox_config).await;
-    println!("{:?}", &run_container_response);
 }

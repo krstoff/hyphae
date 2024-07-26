@@ -1,8 +1,11 @@
 use cri::image_service_client::ImageServiceClient;
 use cri::runtime_service_client::RuntimeServiceClient;
-use k8s_cri::v1::{self as cri, Container, ContainerMetadata, KeyValue, LinuxContainerResources, LinuxSandboxSecurityContext};
+use k8s_cri::v1::{self as cri, Container, ContainerMetadata, KeyValue, LinuxContainerResources, LinuxSandboxSecurityContext, StopPodSandboxRequest};
 use tonic::transport::Channel;
 use std::collections::HashMap;
+use std::sync::Mutex;
+
+use crate::state::State;
 
 pub struct SandBoxConfig {
     pub name: String,
@@ -114,7 +117,7 @@ pub async fn run_container(rsc: &mut RuntimeServiceClient<Channel>, config: Cont
         envs: config.envs.into_iter().map(|(key, value)| cri::KeyValue { key, value }).collect(),
         labels: container_labels,
         annotations: HashMap::new(),
-        log_path: config.name.clone() + &"/id.log",
+        log_path: config.name.clone() + &"-id.log",
         linux: Some(linux_options),
         stdin_once: false,
         stdin: false,
@@ -142,4 +145,35 @@ pub async fn run_container(rsc: &mut RuntimeServiceClient<Channel>, config: Cont
         .into_inner();
 
     return start_resp;
+}
+
+pub async fn remove_pod(rsc: &mut RuntimeServiceClient<Channel>, pod_id: String) -> cri::RemovePodSandboxResponse {
+    let stop_req = cri::StopPodSandboxRequest {
+        pod_sandbox_id: pod_id.clone()
+    };
+    let stop_resp = rsc.stop_pod_sandbox(stop_req)
+        .await
+        .expect("Stopping pod failed")
+        .into_inner();
+
+    let remove_req = cri::RemovePodSandboxRequest {
+        pod_sandbox_id: pod_id.clone()
+    };
+    let remove_resp = rsc.remove_pod_sandbox(remove_req)
+        .await
+        .expect("Pod removal failed")
+        .into_inner();
+
+    return remove_resp;
+}
+
+pub async fn list_containers(rsc: &mut RuntimeServiceClient<Channel>) -> cri::ListContainersResponse {
+    let list_req = cri::ListContainersRequest {
+        filter: None
+    };
+    rsc.list_containers(list_req)
+        .await
+        .expect("Listing containers failed")
+        .into_inner()
+    
 }
