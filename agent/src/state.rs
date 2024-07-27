@@ -95,6 +95,18 @@ impl State {
             }
         }
     }
+
+    pub fn cleanup(&mut self) {
+        let mut targets = vec![];
+        for (id, state) in self.containers.iter() {
+            if *state == ContainerState::Deleted {
+                targets.push(id.clone());
+            }
+        }
+        for id in targets.into_iter() {
+            self.containers.remove(&id);
+        }
+    }
 }
 
 impl std::fmt::Debug for State {
