@@ -9,7 +9,7 @@ pub async fn setup_teardown() {
     println!("{:?}", &pull_image_response);
 
     fn make_uid() -> String {
-        return "testuid".to_owned();
+        return "123456789".to_owned();
     }
     let uid = make_uid();
     let mut runtime_service = RuntimeServiceClient::new(channel);
@@ -24,7 +24,7 @@ pub async fn setup_teardown() {
 
     let container_config = ContainerConfig {
         pod_sandbox_id: create_sandbox_response.pod_sandbox_id.clone(),
-        name: "nginx".to_owned(),
+        name: "nginx-container".to_owned(),
         image: pull_image_response.image_ref.clone(),
         command: "nginx".to_owned(),
         args: vec![],

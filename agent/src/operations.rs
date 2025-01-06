@@ -72,6 +72,7 @@ pub async fn create_sandbox(rsc: &mut RuntimeServiceClient<Channel>, config: San
         .into_inner(), config);
 }
 
+#[derive(Clone)]
 pub struct ContainerConfig {
     pub pod_sandbox_id: String,
     pub name: String,
@@ -84,7 +85,7 @@ pub struct ContainerConfig {
 }
 
 pub async fn run_container(rsc: &mut RuntimeServiceClient<Channel>, config: ContainerConfig, sandbox_config: cri::PodSandboxConfig)
-    -> cri::StartContainerResponse
+    -> (cri::StartContainerResponse, String)
 {
     let container_labels = HashMap::from([
         ("name".to_owned(), config.name.clone()),
@@ -109,15 +110,13 @@ pub async fn run_container(rsc: &mut RuntimeServiceClient<Channel>, config: Cont
             image: config.image,
             annotations: HashMap::new(),
         }),
-        // command: vec![config.command],
-        // args: config.args,
-        command: vec!["/bin/bash".to_owned()],
-        args: vec!["-c".to_owned(), "while true; do echo $(date); sleep 2; done".to_owned()],
+        command: vec![config.command],
+        args: config.args,
         working_dir: config.working_dir,
         envs: config.envs.into_iter().map(|(key, value)| cri::KeyValue { key, value }).collect(),
         labels: container_labels,
         annotations: HashMap::new(),
-        log_path: config.name.clone() + &"-id.log",
+        log_path: config.name.clone() + &"-id.log", // TODO: Fix this
         linux: Some(linux_options),
         stdin_once: false,
         stdin: false,
@@ -138,13 +137,36 @@ pub async fn run_container(rsc: &mut RuntimeServiceClient<Channel>, config: Cont
         .into_inner();
 
     // Start the container
-    let start_request = cri::StartContainerRequest { container_id: create_resp.container_id };
+    let start_request = cri::StartContainerRequest { container_id: create_resp.container_id.clone()};
     let start_resp = rsc.start_container(start_request)
         .await
         .expect("Container start failed")
         .into_inner();
 
-    return start_resp;
+    return (start_resp, create_resp.container_id);
+}
+
+pub async fn stop_container(rsc: &mut RuntimeServiceClient<Channel>, container_id: String) -> cri::StopContainerResponse {
+    let stop_req = cri::StopContainerRequest {
+        container_id: container_id,
+        timeout: 0,
+    };
+    let stop_resp = rsc.stop_container(stop_req)
+        .await
+        .expect("Container stop failed")
+        .into_inner();
+    return stop_resp;
+}
+
+pub async fn remove_container(rsc: &mut RuntimeServiceClient<Channel>, container_id: String) -> cri::RemoveContainerResponse {
+    let remove_req = cri::RemoveContainerRequest {
+        container_id: container_id,
+    };
+    let remove_resp = rsc.remove_container(remove_req)
+        .await
+        .expect("Container stop failed")
+        .into_inner();
+    return remove_resp;
 }
 
 pub async fn remove_pod(rsc: &mut RuntimeServiceClient<Channel>, pod_id: String) -> cri::RemovePodSandboxResponse {

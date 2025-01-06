@@ -53,9 +53,9 @@ impl State {
 
     pub fn process_message(&mut self, message: ContainerEventResponse) {
         use cri::ContainerEventType as cri_event;
-        let id = message.container_id;
+        let id = message.container_id.clone();
+        let _id = id.clone();
         let event_type: cri::ContainerEventType = TryFrom::try_from(message.container_event_type).expect("Invalid container event type detected.");
-        dbg!((id.clone()), event_type.clone());
         match event_type {
             cri_event::ContainerStartedEvent=> {
                 self.containers.entry(id)
@@ -93,18 +93,6 @@ impl State {
                         ContainerState::Deleted
                     );
             }
-        }
-    }
-
-    pub fn cleanup(&mut self) {
-        let mut targets = vec![];
-        for (id, state) in self.containers.iter() {
-            if *state == ContainerState::Deleted {
-                targets.push(id.clone());
-            }
-        }
-        for id in targets.into_iter() {
-            self.containers.remove(&id);
         }
     }
 }
