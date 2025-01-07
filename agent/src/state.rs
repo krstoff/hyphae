@@ -3,28 +3,33 @@ use k8s_cri::v1 as cri;
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use std::collections::HashMap;
 
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub enum ContainerState {
-    Created,
-    Running,
-    Stopped,
-    Unknown,
-    Deleted
+fn to_state(i: i32) -> cri::ContainerState {
+    cri::ContainerState::try_from(i).unwrap()
 }
 
-fn to_state(i: i32) -> ContainerState {
-    use cri::ContainerState::*;
-    match cri::ContainerState::try_from(i).unwrap() {
-        ContainerCreated => ContainerState::Created,
-        ContainerRunning => ContainerState::Running,
-        ContainerExited => ContainerState::Stopped,
-        ContainerUnknown => ContainerState::Unknown,
-    }
+// todo: newtype these
+type PodId = String;
+type CtrId = String;
+type Uid = String;
+type Name = String;
+pub struct PodStatus {
+    ctrs: Vec<CtrId> // This is really only so we can propagate deletion events to State.ctrs, which we won't receive on pod deletion
 }
+pub struct CtrStatus {}
 
+/// Something of a double indirection datastructure for keeping track of containerd's state
+/// pods and ctrs map ids to known statuses. These are populated first by ListContainers etc. and then only updated by events.
+/// uids and names map cluster names to actual containerd store objects. These are stitched together first by ListContainers
+/// and then it's up to control_loop to manage names and garbage collect potential dangling ones.
+/// Importantly, control_loop reads the pods and ctrs and executes operations to containerd but does NOT change the statuses. 
+/// We periodically poll the state of containerd in case someone came along and made pods under our noses.
 pub struct State {
-    containers: std::collections::HashMap<String, ContainerState>,
+    pub pods: HashMap<PodId, PodStatus>, // after initial list operations, ONLY ever populated by the event listener 
+    pub ctrs: HashMap<CtrId, cri::ContainerState>, // after initial list operations, ONLY ever populated by the event listener 
+    pub uids: HashMap<Uid, PodId>,       // after list op, only ever modified by control_loop
+    pub names: HashMap<(Uid, Name), CtrId> // after list op, only ever modified by control_loop
 }
 
 pub type StateHandle = Arc<Mutex<State>>;
@@ -32,73 +37,103 @@ pub type StateHandle = Arc<Mutex<State>>;
 impl State {
     pub fn new() -> Arc<Mutex<Self>> {
         return Arc::new(Mutex::new(State {
-            containers: std::collections::HashMap::new()
+            pods: HashMap::new(),
+            ctrs: HashMap::new(),
+            uids: HashMap::new(),
+            names: HashMap::new(),
         }))
+    }   
+
+    /// Ingest the result of ListContainers and ListPodSandbox into the state,
+    /// populating the name links as well.
+    pub fn observe(&mut self, containers: Vec<cri::Container>, pods: Vec<cri::PodSandbox>) {
+        let mut id_map: HashMap<PodId, Uid> = HashMap::new();
+        for pod in pods {
+            let metadata = pod.metadata.unwrap();
+            self.pods.insert(pod.id.clone(), PodStatus {
+                ctrs: vec![]
+            });
+            id_map.insert(pod.id.clone(), metadata.uid.clone());
+            self.uids.insert(metadata.uid, pod.id);
+        }
+        
+        for ctr in containers {
+            let metadata = ctr.metadata.unwrap();
+            let pod_uid = id_map.get(&ctr.pod_sandbox_id).unwrap().to_owned();
+            let pod_id = &ctr.pod_sandbox_id;
+            self.ctrs.insert(ctr.id.clone(), to_state(ctr.state));
+            self.names.insert((pod_uid, metadata.name), ctr.id.clone());
+            self.pods.get_mut(pod_id).unwrap().ctrs.push(ctr.id);
+        }
     }
 
-    pub fn observe(&mut self, containers: Vec<cri::Container>) {
-        use std::collections::hash_map::Entry;
-        let mut old_cs = &mut self.containers;
-        for c in containers {
-            match old_cs.entry(c.id.clone()) {
-                Entry::Occupied(e) => {
-                    if *e.get() == ContainerState::Stopped {
-                        continue;
+    // I had to experiment to figure out exactly what events are emitted during what combination of pod states and container events.
+    // This is where we update the runtime state, so that on the control_loop's next iteration it can react to state changes.
+    pub fn process_message(&mut self, message: ContainerEventResponse) {
+        use cri::ContainerEventType as CE;
+        use cri::ContainerState as CS;
+        fn to_event(i: i32) -> CE {
+            i.try_into().expect("Invalid container event type detected.")
+        }
+        let id = message.container_id.clone();
+        // when the metadata's pod_id and the event's id match, this is a Pod start event
+        // I think there's a bug in deserialization where the metadata name field is populating with the id. Fix when this breaks!
+        if message.pod_sandbox_metadata.is_some() && message.pod_sandbox_metadata.as_ref().unwrap().name == id {
+            match to_event(message.container_event_type) {
+                CE::ContainerStartedEvent => {
+                    self.pods.insert(id.clone(), PodStatus{ ctrs: vec![] });
+                }
+                _ => {}
+            }
+            return;
+        }
+        // When the metadata is none and the container event type is deletion, this is a Pod deletion event
+        if message.pod_sandbox_metadata.is_none() {
+            match to_event(message.container_event_type) {
+                CE::ContainerDeletedEvent => {
+                    match self.pods.remove(&id) {
+                        None => {}
+                        Some(PodStatus{ ctrs }) => {
+                            // They're all gone, but we never received events for them.
+                            for ctr in ctrs {
+                                self.ctrs.remove(&ctr);
+                            }
+                        }
                     }
                 }
-                Entry::Vacant(e) => {
-                    let state = to_state(c.state);
-                    e.insert(state);
-                }
+                _ => {}
             }
         }
-    }
-
-    pub fn process_message(&mut self, message: ContainerEventResponse) {
-        use cri::ContainerEventType as cri_event;
-        let id = message.container_id.clone();
-        let _id = id.clone();
-        if message.pod_sandbox_metadata.is_some() {
-            let meta = message.pod_sandbox_metadata.unwrap();
-            println!("Event for [{}]: {:?}, {}, {:?}", &_id, meta.namespace, meta.name, meta.uid);
-        }
-        let event_type: cri::ContainerEventType = TryFrom::try_from(message.container_event_type).expect("Invalid container event type detected.");
+        // This must be a container event.
+        let pod_id = message.pod_sandbox_metadata.unwrap().name; // FIX: Again, I suspect this will break in the future.
+        let event_type = to_event(message.container_event_type);
         match event_type {
-            cri_event::ContainerStartedEvent=> {
-                self.containers.entry(id)
-                    .and_modify(|e| {
-                        *e = ContainerState::Running
-                    })
-                    .or_insert(
-                        ContainerState::Running
-                    );
-            },
-            cri_event::ContainerStoppedEvent => {
-                self.containers.entry(id)
-                    .and_modify(|e| {
-                        *e = ContainerState::Stopped
-                    })
-                    .or_insert(
-                        ContainerState::Stopped
-                    );
-            },
-            cri_event::ContainerCreatedEvent => {
-                self.containers.entry(id)
-                    .and_modify(|e| {
-                        *e = ContainerState::Created
-                    })
-                    .or_insert(
-                        ContainerState::Created
-                    );
-            },
-            cri_event::ContainerDeletedEvent => {
-                self.containers.entry(id)
-                    .and_modify(|e| {
-                        *e = ContainerState::Deleted
-                    })
-                    .or_insert(
-                        ContainerState::Deleted
-                    );
+            CE::ContainerCreatedEvent => {
+                self.ctrs.insert(id.clone(), CS::ContainerCreated);
+                match self.pods.get_mut(&pod_id) {
+                    Some(pod_status) => {
+                        pod_status.ctrs.push(id);
+                    }
+                    None => {}
+                }
+            }
+            CE::ContainerStartedEvent => {
+                self.ctrs.insert(id.clone(), CS::ContainerRunning);
+            }
+            CE::ContainerStoppedEvent => {
+                self.ctrs.insert(id.clone(), CS::ContainerExited);
+            }
+            CE::ContainerDeletedEvent => {
+                self.ctrs.remove(&id);
+                match self.pods.get_mut(&pod_id) {
+                    Some(pod_status) => {
+                        match pod_status.ctrs.iter().position(|r| r == &id ) {
+                            Some(i) => { pod_status.ctrs.swap_remove(i); }
+                            None => {}
+                        }
+                    }
+                    None => {} // pod mysteriously doesn't exist. oh well!
+                }
             }
         }
     }
@@ -106,7 +141,7 @@ impl State {
 
 impl std::fmt::Debug for State {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        f.debug_map().entries(self.containers.iter()).finish()?;
+        // f.debug_map().entries(self.containers.iter()).finish()?;
         Ok(())
     }
 }
