@@ -1,7 +1,8 @@
 use k8s_cri::v1::ContainerEventResponse;
 use k8s_cri::v1 as cri;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum ContainerState {
@@ -25,6 +26,8 @@ fn to_state(i: i32) -> ContainerState {
 pub struct State {
     containers: std::collections::HashMap<String, ContainerState>,
 }
+
+pub type StateHandle = Arc<Mutex<State>>;
 
 impl State {
     pub fn new() -> Arc<Mutex<Self>> {
@@ -55,6 +58,10 @@ impl State {
         use cri::ContainerEventType as cri_event;
         let id = message.container_id.clone();
         let _id = id.clone();
+        if message.pod_sandbox_metadata.is_some() {
+            let meta = message.pod_sandbox_metadata.unwrap();
+            println!("Event for [{}]: {:?}, {}, {:?}", &_id, meta.namespace, meta.name, meta.uid);
+        }
         let event_type: cri::ContainerEventType = TryFrom::try_from(message.container_event_type).expect("Invalid container event type detected.");
         match event_type {
             cri_event::ContainerStartedEvent=> {

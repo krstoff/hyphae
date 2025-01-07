@@ -199,3 +199,13 @@ pub async fn list_containers(rsc: &mut RuntimeServiceClient<Channel>) -> cri::Li
         .into_inner()
     
 }
+
+pub async fn list_pods(rsc: &mut RuntimeServiceClient<Channel>) -> cri::ListPodSandboxResponse {
+    let list_req = cri::ListPodSandboxRequest {
+        filter: None,
+    };
+    rsc.list_pod_sandbox(list_req)
+        .await
+        .expect("Listing pods failed")
+        .into_inner()
+}
