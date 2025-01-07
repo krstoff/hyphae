@@ -14,10 +14,11 @@ type PodId = String;
 type CtrId = String;
 type Uid = String;
 type Name = String;
+
+#[derive(Debug)]
 pub struct PodStatus {
     ctrs: Vec<CtrId> // This is really only so we can propagate deletion events to State.ctrs, which we won't receive on pod deletion
 }
-pub struct CtrStatus {}
 
 /// Something of a double indirection datastructure for keeping track of containerd's state
 /// pods and ctrs map ids to known statuses. These are populated first by ListContainers etc. and then only updated by events.
@@ -103,6 +104,7 @@ impl State {
                 }
                 _ => {}
             }
+            return;
         }
         // This must be a container event.
         let pod_id = message.pod_sandbox_metadata.unwrap().name; // FIX: Again, I suspect this will break in the future.
@@ -141,7 +143,21 @@ impl State {
 
 impl std::fmt::Debug for State {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        // f.debug_map().entries(self.containers.iter()).finish()?;
+        f.write_str("uids: ")?;
+        f.debug_map().entries(self.uids.iter()).finish()?;
+        f.write_str("\n")?;
+
+        f.write_str("pods: ")?;
+        f.debug_map().entries(self.pods.iter()).finish()?;
+        f.write_str("\n")?;
+
+        f.write_str("names: ")?;
+        f.debug_map().entries(self.names.iter()).finish()?;
+        f.write_str("\n")?;
+
+        f.write_str("ctrs: ")?;
+        f.debug_map().entries(self.ctrs.iter()).finish()?;
+        f.write_str("\n")?;
         Ok(())
     }
 }
