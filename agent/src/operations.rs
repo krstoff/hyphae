@@ -4,6 +4,7 @@ use k8s_cri::v1::{self as cri, Container, ContainerMetadata, KeyValue, LinuxCont
 use tonic::transport::Channel;
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct SandBoxConfig {
     pub name: String,
     pub uid: String,
