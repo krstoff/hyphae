@@ -1,7 +1,7 @@
 use cri::image_service_client::ImageServiceClient;
 use cri::runtime_service_client::RuntimeServiceClient;
 use k8s_cri::v1::{self as cri, Container, ContainerMetadata, KeyValue, LinuxContainerResources, LinuxSandboxSecurityContext, StopPodSandboxRequest};
-use tonic::transport::Channel;
+use tonic::{transport::Channel, Status};
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -14,7 +14,7 @@ pub struct SandBoxConfig {
 
 #[derive(Clone)]
 pub struct ContainerConfig {
-    pub pod_sandbox_id: String,
+    pub pod_uid: String,
     pub name: String,
     pub image: String,
     pub command: String,
@@ -24,66 +24,72 @@ pub struct ContainerConfig {
     pub privileged: bool,
 }
 
-pub async fn pull_image(isc: &mut ImageServiceClient<Channel>, name: String) -> cri::PullImageResponse {
+impl SandBoxConfig {
+    pub fn to_cri_config(self) -> cri::PodSandboxConfig {
+        let metadata = cri::PodSandboxMetadata {
+            name: self.name.clone(),
+            uid: self.uid,
+            namespace: self.namespace,
+            attempt: 0,
+        };
+        let sandbox_labels = HashMap::from([
+            ("name".to_owned(), self.name.clone()),
+        ]);
+        let linux_options = cri::LinuxPodSandboxConfig {
+            cgroup_parent: "".to_owned(),
+            resources: self.resources,
+            security_context: Some(cri::LinuxSandboxSecurityContext {
+                namespace_options: Some(cri::NamespaceOption {
+                    network: cri::NamespaceMode::Node.into(),
+                    ..Default::default()
+                }),
+                ..Default::default()   
+            }),
+            overhead: None,
+            sysctls: HashMap::new(),
+        };
+        let config = cri::PodSandboxConfig {
+            metadata: Some(metadata),
+            labels: sandbox_labels,
+            linux: Some(linux_options),
+            hostname: String::new(),
+            dns_config: None,
+            log_directory: "/var/log/pods/".to_owned() + &self.name,
+            port_mappings: vec![],
+            annotations: HashMap::new(),
+            windows: None,
+        };
+        config
+    }
+}
+
+pub async fn pull_image(isc: &mut ImageServiceClient<Channel>, name: String) -> Result<cri::PullImageResponse, Status> {
     isc.pull_image(cri::PullImageRequest{
         image: Some(cri:: ImageSpec {
             image: name,
-            annotations: Default::default()
+            annotations: Default::default(),
+            ..Default::default()
         }),
         auth: None,
         sandbox_config: None,
     })
         .await
-        .expect("Could not pull image")
-        .into_inner()
+        .map(|m| m.into_inner())
 }
 
-pub async fn create_sandbox(rsc: &mut RuntimeServiceClient<Channel>, config: SandBoxConfig) -> (cri::RunPodSandboxResponse, cri::PodSandboxConfig) {
-    let metadata = cri::PodSandboxMetadata {
-        name: config.name.clone(),
-        uid: config.uid,
-        namespace: config.namespace,
-        attempt: 0,
-    };
-    let sandbox_labels = HashMap::from([
-        ("name".to_owned(), config.name.clone()),
-    ]);
-    let linux_options = cri::LinuxPodSandboxConfig {
-        cgroup_parent: "".to_owned(),
-        resources: config.resources,
-        security_context: Some(cri::LinuxSandboxSecurityContext {
-            namespace_options: Some(cri::NamespaceOption {
-                network: cri::NamespaceMode::Node.into(),
-                ..Default::default()
-            }),
-            ..Default::default()   
-        }),
-        overhead: None,
-        sysctls: HashMap::new(),
-    };
-    let config = cri::PodSandboxConfig {
-        metadata: Some(metadata),
-        labels: sandbox_labels,
-        linux: Some(linux_options),
-        hostname: String::new(),
-        dns_config: None,
-        log_directory: "/var/log/pods/".to_owned() + &config.name,
-        port_mappings: vec![],
-        annotations: HashMap::new(),
-        windows: None,
-    };
+pub async fn create_sandbox(rsc: &mut RuntimeServiceClient<Channel>, config: SandBoxConfig) -> Result<(String, cri::PodSandboxConfig), Status> {
+    let config = config.to_cri_config();
     let request = cri::RunPodSandboxRequest {
         config: Some(config.clone()),
         runtime_handler: String::new(),
     };
-    return (rsc.run_pod_sandbox(request)
+    return rsc.run_pod_sandbox(request)
         .await
-        .expect("Sandbox creation failed")
-        .into_inner(), config);
+        .map(|m| (m.into_inner().pod_sandbox_id, config));
 }
 
-pub async fn run_container(rsc: &mut RuntimeServiceClient<Channel>, config: ContainerConfig, sandbox_config: cri::PodSandboxConfig)
-    -> (cri::StartContainerResponse, String)
+pub async fn create_container(rsc: &mut RuntimeServiceClient<Channel>, pod_id: String, config: ContainerConfig, sandbox_config: SandBoxConfig)
+    -> Result<String, Status>
 {
     let container_labels = HashMap::from([
         ("name".to_owned(), config.name.clone()),
@@ -107,6 +113,7 @@ pub async fn run_container(rsc: &mut RuntimeServiceClient<Channel>, config: Cont
         image: Some(cri::ImageSpec {
             image: config.image,
             annotations: HashMap::new(),
+            ..Default::default()
         }),
         command: vec![config.command],
         args: config.args,
@@ -122,88 +129,78 @@ pub async fn run_container(rsc: &mut RuntimeServiceClient<Channel>, config: Cont
         mounts: vec![],
         devices: vec![],
         windows: None,
+        cdi_devices: vec![],
     };
     let create_request = cri::CreateContainerRequest {
-        pod_sandbox_id: config.pod_sandbox_id,
+        pod_sandbox_id: pod_id,
         config: Some(cri_container_config),
-        sandbox_config: Some(sandbox_config),
+        sandbox_config: Some(sandbox_config.to_cri_config()),
     };
     
-    let create_resp = rsc.create_container(create_request)
+    rsc.create_container(create_request)
         .await
-        .expect("Container creation failed")
-        .into_inner();
-
-    // Start the container
-    let start_request = cri::StartContainerRequest { container_id: create_resp.container_id.clone()};
-    let start_resp = rsc.start_container(start_request)
-        .await
-        .expect("Container start failed")
-        .into_inner();
-
-    return (start_resp, create_resp.container_id);
+        .map(|m| m.into_inner().container_id)
 }
 
-pub async fn stop_container(rsc: &mut RuntimeServiceClient<Channel>, container_id: String) -> cri::StopContainerResponse {
+pub async fn start_container(rsc: &mut RuntimeServiceClient<Channel>, id: String) -> Result<(), Status> {
+    rsc.start_container(cri::StartContainerRequest { container_id: id })
+        .await
+        .map(|_| ())
+}
+
+pub async fn stop_container(rsc: &mut RuntimeServiceClient<Channel>, container_id: String) -> Result<(), Status> {
     let stop_req = cri::StopContainerRequest {
-        container_id: container_id,
+        container_id,
         timeout: 0,
     };
     let stop_resp = rsc.stop_container(stop_req)
         .await
-        .expect("Container stop failed")
-        .into_inner();
+        .map(|_| ());
     return stop_resp;
 }
 
-pub async fn remove_container(rsc: &mut RuntimeServiceClient<Channel>, container_id: String) -> cri::RemoveContainerResponse {
+pub async fn remove_container(rsc: &mut RuntimeServiceClient<Channel>, container_id: String) -> Result<(), Status> {
     let remove_req = cri::RemoveContainerRequest {
         container_id: container_id,
     };
     let remove_resp = rsc.remove_container(remove_req)
         .await
-        .expect("Container stop failed")
-        .into_inner();
+        .map(|_| ());
     return remove_resp;
 }
 
-pub async fn remove_pod(rsc: &mut RuntimeServiceClient<Channel>, pod_id: String) -> cri::RemovePodSandboxResponse {
+pub async fn remove_pod(rsc: &mut RuntimeServiceClient<Channel>, pod_id: String) -> Result<(), Status> {
     let stop_req = cri::StopPodSandboxRequest {
         pod_sandbox_id: pod_id.clone()
     };
-    let stop_resp = rsc.stop_pod_sandbox(stop_req)
+    let _stop_resp = rsc.stop_pod_sandbox(stop_req)
         .await
-        .expect("Stopping pod failed")
-        .into_inner();
+        .map(|m| m.into_inner())?;
 
     let remove_req = cri::RemovePodSandboxRequest {
         pod_sandbox_id: pod_id.clone()
     };
     let remove_resp = rsc.remove_pod_sandbox(remove_req)
         .await
-        .expect("Pod removal failed")
-        .into_inner();
+        .map(|_| ());
 
     return remove_resp;
 }
 
-pub async fn list_containers(rsc: &mut RuntimeServiceClient<Channel>) -> cri::ListContainersResponse {
+pub async fn list_containers(rsc: &mut RuntimeServiceClient<Channel>) -> Result<cri::ListContainersResponse, Status> {
     let list_req = cri::ListContainersRequest {
         filter: None
     };
     rsc.list_containers(list_req)
         .await
-        .expect("Listing containers failed")
-        .into_inner()
-    
+        .map(|m| m.into_inner())
 }
 
-pub async fn list_pods(rsc: &mut RuntimeServiceClient<Channel>) -> cri::ListPodSandboxResponse {
+pub async fn list_pods(rsc: &mut RuntimeServiceClient<Channel>) -> Result<cri::ListPodSandboxResponse, Status> {
     let list_req = cri::ListPodSandboxRequest {
         filter: None,
     };
     rsc.list_pod_sandbox(list_req)
         .await
-        .expect("Listing pods failed")
-        .into_inner()
+        .map(|m| m.into_inner())
 }

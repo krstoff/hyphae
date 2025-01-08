@@ -78,18 +78,19 @@ impl State {
         }
         let id = message.container_id.clone();
         // when the metadata's pod_id and the event's id match, this is a Pod start event
-        // I think there's a bug in deserialization where the metadata name field is populating with the id. Fix when this breaks!
-        if message.pod_sandbox_metadata.is_some() && message.pod_sandbox_metadata.as_ref().unwrap().name == id {
+        if message.pod_sandbox_status.is_some() && message.pod_sandbox_status.as_ref().unwrap().id == id.clone() {
             match to_event(message.container_event_type) {
                 CE::ContainerStartedEvent => {
                     self.pods.insert(id.clone(), PodStatus{ ctrs: vec![] });
+                    #[cfg(debug_assertions)]
+                    println!("EVENT: PodStarted: {}", id.clone());
                 }
                 _ => {}
             }
             return;
         }
         // When the metadata is none and the container event type is deletion, this is a Pod deletion event
-        if message.pod_sandbox_metadata.is_none() {
+        if message.pod_sandbox_status.is_none() {
             match to_event(message.container_event_type) {
                 CE::ContainerDeletedEvent => {
                     match self.pods.remove(&id) {
@@ -101,29 +102,37 @@ impl State {
                             }
                         }
                     }
+                    #[cfg(debug_assertions)]
+                    println!("EVENT: PodDeleted: {}", id.clone());
                 }
                 _ => {}
             }
             return;
         }
         // This must be a container event.
-        let pod_id = message.pod_sandbox_metadata.unwrap().name; // FIX: Again, I suspect this will break in the future.
+        let pod_id = message.pod_sandbox_status.unwrap().id;
         let event_type = to_event(message.container_event_type);
         match event_type {
             CE::ContainerCreatedEvent => {
                 self.ctrs.insert(id.clone(), CS::ContainerCreated);
                 match self.pods.get_mut(&pod_id) {
                     Some(pod_status) => {
-                        pod_status.ctrs.push(id);
+                        pod_status.ctrs.push(id.clone());
                     }
                     None => {}
                 }
+                #[cfg(debug_assertions)]
+                println!("EVENT: ContainerCreated: {}", id.clone());
             }
             CE::ContainerStartedEvent => {
                 self.ctrs.insert(id.clone(), CS::ContainerRunning);
+                #[cfg(debug_assertions)]
+                println!("EVENT: ContainerStarted: {}", id.clone());
             }
             CE::ContainerStoppedEvent => {
                 self.ctrs.insert(id.clone(), CS::ContainerExited);
+                #[cfg(debug_assertions)]
+                println!("EVENT: ContainerStopped: {}", id.clone());
             }
             CE::ContainerDeletedEvent => {
                 self.ctrs.remove(&id);
@@ -136,6 +145,8 @@ impl State {
                     }
                     None => {} // pod mysteriously doesn't exist. oh well!
                 }
+                #[cfg(debug_assertions)]
+                println!("EVENT: ContainerDeleted: {}", id.clone());
             }
         }
     }

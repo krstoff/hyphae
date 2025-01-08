@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-k8s-cri = "0.8.0"
+k8s-cri = { git = "https://github.com/krstoff/k8s-cri/" , rev = "42149bae798854c1cd17d97b69f19b61ee9dff54" }
 tonic = "*"
 tower = "*"
 tokio = { version = "*", features = ["macros", "rt-multi-thread"] }
+hyper-util = "*"

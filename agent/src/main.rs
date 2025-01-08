@@ -14,12 +14,15 @@ use std::time::Duration;
 use operations::*;
 use state::*;
 
-async fn connect_uds(path: String) -> Result<tonic::transport::Channel, tonic::transport::Error> {
-    tonic::transport::Endpoint::try_from("http://[::]:50051")
-    .unwrap()
+const CONTAINERD_SOCKET_PATH: &'static str = "/run/containerd/containerd.sock";
+
+async fn connect_uds() -> Result<tonic::transport::Channel, tonic::transport::Error> {
+    use hyper_util::rt::TokioIo;
+    use tokio::net::UnixStream;
+    tonic::transport::Endpoint::try_from("http://[::]:50051")?
     .connect_with_connector(
-        tower::service_fn(move |_| {
-            tokio::net::UnixStream::connect(path.clone())
+        tower::service_fn(move |_| async {
+            Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(CONTAINERD_SOCKET_PATH).await?))
         })
     ).await
 }
@@ -44,31 +47,27 @@ async fn read_all_messages(runtime_service: &mut RuntimeServiceClient<tonic::tra
 
 #[tokio::main]
 async fn main() {
-    let channel = connect_uds("/run/containerd/containerd.sock".to_owned()).await.expect("Could not connect to containerd");
+    let channel = connect_uds().await.expect("Could not connect to containerd");
     let mut runtime_service = RuntimeServiceClient::new(channel.clone());
 
     let runtime_state = state::State::new();
     let target_state = control_loop::Target::new();
 
     let events_process = tokio::spawn(read_events(runtime_service.clone(), runtime_state.clone()));
-    let control_process = tokio::spawn(control_loop::control_loop(runtime_service.clone(), runtime_state.clone(), target_state.clone()));
+    // let control_process = tokio::spawn(control_loop::control_loop(runtime_service.clone(), runtime_state.clone(), target_state.clone()));
     // let containers = list_containers(&mut runtime_service).await.containers;
 
     setup_teardown(runtime_state.clone()).await;
-    let result = control_process.await;
-    println!("control_process: {:?}", result);
-    
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
     }
 }
 
 async fn setup_teardown(state: StateHandle) {
-    let channel = connect_uds("/run/containerd/containerd.sock".to_owned()).await.expect("Could not connect to containerd");
+    let channel = connect_uds().await.expect("Could not connect to containerd");
     let mut image_service = ImageServiceClient::new(channel.clone());
     let image_name = "docker.io/library/nginx:latest".to_owned();
-    let pull_image_response = pull_image(&mut image_service, image_name).await;
-    println!("{:?}", &pull_image_response);
+    let pull_image_response = pull_image(&mut image_service, image_name).await.unwrap();
     let mut runtime_service = RuntimeServiceClient::new(channel);
 
     fn make_uid() -> String {
@@ -78,16 +77,15 @@ async fn setup_teardown(state: StateHandle) {
 
     let sandbox_config = SandBoxConfig {
         name: "nginx".to_owned(),
-        uid: uid,
+        uid: uid.clone(),
         namespace: "default".to_owned(),
         resources: None,
     };
-    let (create_sandbox_response, podsandbox_config) = create_sandbox(&mut runtime_service, sandbox_config).await;
-    println!("{:?}", &create_sandbox_response);
+    let (pod_id, _) = create_sandbox(&mut runtime_service, sandbox_config.clone()).await.unwrap();
 
     let container_config = ContainerConfig {
-        pod_sandbox_id: create_sandbox_response.pod_sandbox_id.clone(),
         name: "nginx-container".to_owned(),
+        pod_uid: uid,
         image: pull_image_response.image_ref.clone(),
         command: "nginx".to_owned(),
         args: vec![],
@@ -95,14 +93,14 @@ async fn setup_teardown(state: StateHandle) {
         envs: vec![],
         privileged: false
     };
-    let run_container_response = run_container(&mut runtime_service, container_config, podsandbox_config).await;
-    println!("{:?}", &run_container_response);
+    let container_id = create_container(&mut runtime_service, pod_id, container_config, sandbox_config).await.unwrap();
+    println!("Container created: {:?}", &container_id);
 
     tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
 
     //////////////////////
-    let containers = list_containers(&mut runtime_service).await.containers;
-    let pods = list_pods(&mut runtime_service).await.items;
+    let containers = list_containers(&mut runtime_service).await.unwrap().containers;
+    let pods = list_pods(&mut runtime_service).await.unwrap().items;
     dbg!(containers);
     dbg!(pods);
 }

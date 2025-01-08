@@ -1,6 +1,7 @@
 use k8s_cri::v1::runtime_service_client::RuntimeServiceClient;
 use k8s_cri::v1::ContainerState as CS;
 use tokio::sync::Mutex;
+use tonic::Status;
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -13,6 +14,8 @@ use crate::operations::{ContainerConfig, SandBoxConfig};
 pub const CONTROL_LOOP_INTERVAL_MS: u64 = 3_000;
 type UID = String;
 type Name = String;
+
+type RuntimeService = RuntimeServiceClient<tonic::transport::Channel>;
 
 #[derive(Clone)]
 pub struct PodConfig {
@@ -32,9 +35,8 @@ impl Target {
 
 enum Action {
     StartPod(UID, SandBoxConfig),
-    CreateContainer((UID, Name), ContainerConfig),
+    CreateContainer((UID, Name), ContainerConfig, SandBoxConfig),
     StartContainer((UID, Name)),
-    RestartContainer((UID, Name), ContainerConfig),
     StopContainer((UID, Name)),
     DeleteContainer((UID, Name)),
     DeletePod(UID)
@@ -51,24 +53,24 @@ impl Task {
         let containers = pod.containers;
         let mut steps = vec![];
 
-        steps.push(Action::StartPod(uid.clone(), sandbox_config));
+        steps.push(Action::StartPod(uid.clone(), sandbox_config.clone()));
 
         for (name, container_config) in containers {
-            steps.push(Action::CreateContainer((uid.clone(), name.clone()), container_config));
+            steps.push(Action::CreateContainer((uid.clone(), name.clone()), container_config, sandbox_config.clone()));
             steps.push(Action::StartContainer((uid.clone(), name)));
         }
         Task { steps }
     }
-    pub fn run_container(key: (UID, Name), config: ContainerConfig) -> Task {
+    pub fn run_container(key: (UID, Name), config: ContainerConfig, sandbox_config: SandBoxConfig) -> Task {
         let mut steps = vec![];
-        steps.push(Action::CreateContainer(key.clone(), config));
+        steps.push(Action::CreateContainer(key.clone(), config, sandbox_config));
         steps.push(Action::StartContainer(key));
         Task { steps }
     }
-    pub fn restart_container(key: (UID, Name), config: ContainerConfig) -> Task {
+    pub fn restart_container(key: (UID, Name), config: ContainerConfig, sandbox_config: SandBoxConfig) -> Task {
         let mut steps = vec![];
         steps.push(Action::DeleteContainer(key.clone()));
-        steps.push(Action::CreateContainer(key.clone(), config));
+        steps.push(Action::CreateContainer(key.clone(), config, sandbox_config));
         steps.push(Action::StartContainer(key));
         Task { steps }
     }
@@ -79,6 +81,42 @@ impl Task {
     }
     pub fn delete_container(key: (UID, Name)) -> Task {
         Task { steps: vec![Action::DeleteContainer(key)]}
+    }
+
+    pub async fn execute(self, rsc: &mut RuntimeService, state: &mut State) -> Result<(), Status> {
+        for step in self.steps {
+            match step {
+                Action::StartPod(uid, sandbox_config) => {
+                    let (pod_id, pod_config) = ops::create_sandbox(rsc, sandbox_config).await?;
+                    state.uids.insert(uid, pod_id);
+                }
+                Action::CreateContainer((uid, name), container_config, sandbox_config) => {
+                    let pod_id = state.uids.get(&uid).unwrap();
+                    let ctr_id = ops::create_container(rsc, pod_id.clone(), container_config, sandbox_config).await?;
+                    state.names.insert((uid, name), ctr_id);
+                }
+                Action::StartContainer(key) => {
+                    let cid = state.names.get(&key).unwrap();
+                    ops::start_container(rsc, cid.clone()).await?;
+                }
+                Action::StopContainer(key) => {
+                    let cid = state.names.get(&key).unwrap();
+                    ops::stop_container(rsc, cid.clone()).await?;
+                }
+                Action::DeleteContainer(key) => {
+                    let cid = state.names.get(&key).unwrap();
+                    ops::remove_container(rsc, cid.clone()).await?;
+                    state.names.remove(&key);
+                }
+                Action::DeletePod(uid) => {
+                    let pid = state.uids.get(&uid).unwrap();
+                    ops::remove_pod(rsc, pid.clone()).await?;
+                    state.uids.remove(&uid);
+                    state.names.retain(|&(ref uid2, _), _| uid2 != &uid);
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -91,7 +129,7 @@ pub async fn control_loop(
         let mut state = runtime_state.lock().await;
         let target = target_state.lock().await;
         let plan = reconcile(&mut state, &target);
-        let results = execute(&mut runtime_service, &mut state, plan);
+        let results = execute(&mut runtime_service, &mut state, plan).await;
         tokio::time::sleep(Duration::from_millis(CONTROL_LOOP_INTERVAL_MS)).await;
     }
 }
@@ -114,18 +152,18 @@ fn reconcile<'a>(state: &mut State, target: &Target) -> Vec<Task> {
         for (name, ctrconfig) in podconfig.containers.iter() {
             let key = (uid.clone(), name.clone());
             if !state.names.contains_key(&key) {
-                plan.push(Task::run_container(key.clone(), ctrconfig.clone()));
+                plan.push(Task::run_container(key.clone(), ctrconfig.clone(), podconfig.config.clone()));
             } else {
                 let cid = state.names.get(&key).unwrap();
                 if !state.ctrs.contains_key(cid) {
                     state.names.remove(&key);
-                    plan.push(Task::run_container(key.clone(), ctrconfig.clone()));
+                    plan.push(Task::run_container(key.clone(), ctrconfig.clone(), podconfig.config.clone()));
                     continue;
                 }
                 match state.ctrs.get(cid).unwrap() {
                     &CS::ContainerRunning => {} // good
                     &CS::ContainerExited => { // bad
-                        plan.push(Task::restart_container(key.clone(), ctrconfig.clone()));
+                        plan.push(Task::restart_container(key.clone(), ctrconfig.clone(), podconfig.config.clone()));
                     }
                     &CS::ContainerCreated => {
                         plan.push(Task::start_container(key.clone()));
@@ -185,8 +223,10 @@ fn reconcile<'a>(state: &mut State, target: &Target) -> Vec<Task> {
     return plan;
 }
 
-async fn execute<'a>(rsc: &mut RuntimeServiceClient<tonic::transport::Channel>, state: &'a mut State, plan: Vec<Task>) {
-    
+async fn execute(rsc: &mut RuntimeService, state: &mut State, plan: Vec<Task>) {
+    for task in plan {
+        let result = task.execute(rsc, state);
+    }
 }
 
 #[cfg(test)]
