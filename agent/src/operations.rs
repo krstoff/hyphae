@@ -3,9 +3,6 @@ use cri::runtime_service_client::RuntimeServiceClient;
 use k8s_cri::v1::{self as cri, Container, ContainerMetadata, KeyValue, LinuxContainerResources, LinuxSandboxSecurityContext, StopPodSandboxRequest};
 use tonic::transport::Channel;
 use std::collections::HashMap;
-use std::sync::Mutex;
-
-use crate::state::State;
 
 pub struct SandBoxConfig {
     pub name: String,

@@ -1,3 +1,4 @@
+mod control_loop;
 mod operations;
 mod state;
 #[cfg(test)]
@@ -8,12 +9,10 @@ use cri::image_service_client::ImageServiceClient;
 use cri::runtime_service_client::RuntimeServiceClient;
 use tokio::runtime;
 
-use std::{sync::{Arc, Mutex}, time::Duration};
+use std::time::Duration;
 
 use operations::*;
 use state::*;
-
-const CLEANUP_INTERVAL_MS: u64 = 10_000;
 
 async fn connect_uds(path: String) -> Result<tonic::transport::Channel, tonic::transport::Error> {
     tonic::transport::Endpoint::try_from("http://[::]:50051")
@@ -28,7 +27,7 @@ async fn connect_uds(path: String) -> Result<tonic::transport::Channel, tonic::t
 async fn read_events(mut runtime_service: RuntimeServiceClient<tonic::transport::Channel>, mut runtime_state: StateHandle) {
     loop {
         read_all_messages(&mut runtime_service, &mut runtime_state).await;
-        tokio::time::sleep(Duration::from_millis(1_000)).await;
+        tokio::time::sleep(Duration::from_millis(2_000)).await;
     }
 }
 
@@ -48,20 +47,23 @@ async fn main() {
     let channel = connect_uds("/run/containerd/containerd.sock".to_owned()).await.expect("Could not connect to containerd");
     let mut runtime_service = RuntimeServiceClient::new(channel.clone());
 
-    let runtime_state = State::new();
+    let runtime_state = state::State::new();
+    let target_state = control_loop::Target::new();
 
     let events_process = tokio::spawn(read_events(runtime_service.clone(), runtime_state.clone()));
+    let control_process = tokio::spawn(control_loop::control_loop(runtime_service.clone(), runtime_state.clone(), target_state.clone()));
     // let containers = list_containers(&mut runtime_service).await.containers;
-    // runtime_state.lock().unwrap().observe(containers);
 
-    setup_teardown().await;
+    setup_teardown(runtime_state.clone()).await;
+    let result = control_process.await;
+    println!("control_process: {:?}", result);
     
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
     }
 }
 
-pub async fn setup_teardown() {
+async fn setup_teardown(state: StateHandle) {
     let channel = connect_uds("/run/containerd/containerd.sock".to_owned()).await.expect("Could not connect to containerd");
     let mut image_service = ImageServiceClient::new(channel.clone());
     let image_name = "docker.io/library/nginx:latest".to_owned();
