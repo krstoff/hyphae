@@ -161,3 +161,8 @@ impl std::fmt::Debug for State {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+}

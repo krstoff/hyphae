@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::operations::*;
+use crate::operations as ops;
 use crate::state::State;
 use crate::StateHandle;
 use crate::operations::{ContainerConfig, SandBoxConfig};
@@ -46,7 +46,8 @@ pub async fn control_loop(
     loop {
         let mut state = runtime_state.lock().await;
         let target = target_state.lock().await;
-        let _plan = reconcile(&mut state, &target);
+        let plan = reconcile(&mut state, &target);
+        let results = execute(&mut runtime_service, &mut state, plan);
         tokio::time::sleep(Duration::from_millis(CONTROL_LOOP_INTERVAL_MS)).await;
     }
 }
@@ -129,4 +130,13 @@ fn reconcile<'a>(state: &mut State, target: &'a Target) -> Vec<Action<'a>> {
     }
     for uid in dangling_names { state.uids.remove(&uid); }
     return plan;
+}
+
+async fn execute<'a>(rsc: &mut RuntimeServiceClient<tonic::transport::Channel>, state: &'a mut State, plan: Vec<Action<'a>>) {
+    
+}
+
+#[cfg(test)]
+mod tests {
+
 }

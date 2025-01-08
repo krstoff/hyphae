@@ -11,6 +11,18 @@ pub struct SandBoxConfig {
     pub namespace: String,
 }
 
+#[derive(Clone)]
+pub struct ContainerConfig {
+    pub pod_sandbox_id: String,
+    pub name: String,
+    pub image: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub working_dir: String,
+    pub envs: Vec<(String, String)>,
+    pub privileged: bool,
+}
+
 pub async fn pull_image(isc: &mut ImageServiceClient<Channel>, name: String) -> cri::PullImageResponse {
     isc.pull_image(cri::PullImageRequest{
         image: Some(cri:: ImageSpec {
@@ -67,18 +79,6 @@ pub async fn create_sandbox(rsc: &mut RuntimeServiceClient<Channel>, config: San
         .await
         .expect("Sandbox creation failed")
         .into_inner(), config);
-}
-
-#[derive(Clone)]
-pub struct ContainerConfig {
-    pub pod_sandbox_id: String,
-    pub name: String,
-    pub image: String,
-    pub command: String,
-    pub args: Vec<String>,
-    pub working_dir: String,
-    pub envs: Vec<(String, String)>,
-    pub privileged: bool,
 }
 
 pub async fn run_container(rsc: &mut RuntimeServiceClient<Channel>, config: ContainerConfig, sandbox_config: cri::PodSandboxConfig)
