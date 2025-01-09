@@ -53,7 +53,7 @@ async fn main() {
     let runtime_state = state::State::new();
     let target_state = control_loop::Target::new();
 
-    let events_process = tokio::spawn(read_events(runtime_service.clone(), runtime_state.clone()));
+    // let events_process = tokio::spawn(read_events(runtime_service.clone(), runtime_state.clone()));
     // let control_process = tokio::spawn(control_loop::control_loop(runtime_service.clone(), runtime_state.clone(), target_state.clone()));
     // let containers = list_containers(&mut runtime_service).await.containers;
 
@@ -85,6 +85,19 @@ async fn setup_teardown(state: StateHandle) {
 
     let container_config = ContainerConfig {
         name: "nginx-container".to_owned(),
+        pod_uid: uid.clone(),
+        image: pull_image_response.image_ref.clone(),
+        command: "nginx".to_owned(),
+        args: vec![],
+        working_dir: "".to_owned(),
+        envs: vec![],
+        privileged: false
+    };
+    let container_id = create_container(&mut runtime_service, pod_id.clone(), container_config, sandbox_config.clone()).await.unwrap();
+
+    
+    let container_config2 = ContainerConfig {
+        name: "nginx-container2".to_owned(),
         pod_uid: uid,
         image: pull_image_response.image_ref.clone(),
         command: "nginx".to_owned(),
@@ -93,14 +106,19 @@ async fn setup_teardown(state: StateHandle) {
         envs: vec![],
         privileged: false
     };
-    let container_id = create_container(&mut runtime_service, pod_id, container_config, sandbox_config).await.unwrap();
+    let container_id2 = create_container(&mut runtime_service, pod_id.clone(), container_config2, sandbox_config).await.unwrap();
     println!("Container created: {:?}", &container_id);
+
+    start_container(&mut runtime_service, container_id2).await.unwrap();
+    start_container(&mut runtime_service, container_id).await.unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
 
-    //////////////////////
-    let containers = list_containers(&mut runtime_service).await.unwrap().containers;
-    let pods = list_pods(&mut runtime_service).await.unwrap().items;
-    dbg!(containers);
-    dbg!(pods);
+    remove_pod(&mut runtime_service, pod_id.clone()).await;
+    
+    // //////////////////////
+    // let containers = list_containers(&mut runtime_service).await.unwrap().containers;
+    // let pods = list_pods(&mut runtime_service).await.unwrap().items;
+    // dbg!(containers);
+    // dbg!(pods);
 }

@@ -82,8 +82,8 @@ impl State {
             match to_event(message.container_event_type) {
                 CE::ContainerStartedEvent => {
                     self.pods.insert(id.clone(), PodStatus{ ctrs: vec![] });
-                    #[cfg(debug_assertions)]
-                    println!("EVENT: PodStarted: {}", id.clone());
+                    // #[cfg(debug_assertions)]
+                    // println!("EVENT: PodStarted: {}", id.clone());
                 }
                 _ => {}
             }
