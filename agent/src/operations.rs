@@ -77,7 +77,7 @@ pub async fn pull_image(isc: &mut ImageServiceClient<Channel>, name: String) -> 
         .map(|m| m.into_inner())
 }
 
-pub async fn create_sandbox(rsc: &mut RuntimeServiceClient<Channel>, config: SandBoxConfig) -> Result<(String, cri::PodSandboxConfig), Status> {
+pub async fn create_sandbox(mut rsc: RuntimeServiceClient<Channel>, config: SandBoxConfig) -> Result<(String, cri::PodSandboxConfig), Status> {
     let config = config.to_cri_config();
     let request = cri::RunPodSandboxRequest {
         config: Some(config.clone()),
@@ -88,7 +88,7 @@ pub async fn create_sandbox(rsc: &mut RuntimeServiceClient<Channel>, config: San
         .map(|m| (m.into_inner().pod_sandbox_id, config));
 }
 
-pub async fn create_container(rsc: &mut RuntimeServiceClient<Channel>, pod_id: String, config: ContainerConfig, sandbox_config: SandBoxConfig)
+pub async fn create_container(mut rsc: RuntimeServiceClient<Channel>, pod_id: String, config: ContainerConfig, sandbox_config: SandBoxConfig)
     -> Result<String, Status>
 {
     let container_labels = HashMap::from([
@@ -142,34 +142,30 @@ pub async fn create_container(rsc: &mut RuntimeServiceClient<Channel>, pod_id: S
         .map(|m| m.into_inner().container_id)
 }
 
-pub async fn start_container(rsc: &mut RuntimeServiceClient<Channel>, id: String) -> Result<(), Status> {
+pub async fn start_container(mut rsc: RuntimeServiceClient<Channel>, id: String) -> Result<(), Status> {
     rsc.start_container(cri::StartContainerRequest { container_id: id })
         .await
         .map(|_| ())
 }
 
-pub async fn stop_container(rsc: &mut RuntimeServiceClient<Channel>, container_id: String) -> Result<(), Status> {
+pub async fn stop_container(mut rsc: RuntimeServiceClient<Channel>, container_id: String) -> Result<(), Status> {
     let stop_req = cri::StopContainerRequest {
         container_id,
         timeout: 0,
     };
-    let stop_resp = rsc.stop_container(stop_req)
+    rsc.stop_container(stop_req)
         .await
-        .map(|_| ());
-    return stop_resp;
+        .map(|_| ())
 }
 
-pub async fn remove_container(rsc: &mut RuntimeServiceClient<Channel>, container_id: String) -> Result<(), Status> {
+pub async fn remove_container(mut rsc: RuntimeServiceClient<Channel>, container_id: String) -> Result<(), Status> {
     let remove_req = cri::RemoveContainerRequest {
         container_id: container_id,
     };
-    let remove_resp = rsc.remove_container(remove_req)
-        .await
-        .map(|_| ());
-    return remove_resp;
+    rsc.remove_container(remove_req).await.map(|_| ())
 }
 
-pub async fn remove_pod(rsc: &mut RuntimeServiceClient<Channel>, pod_id: String) -> Result<(), Status> {
+pub async fn remove_pod(mut rsc: RuntimeServiceClient<Channel>, pod_id: String) -> Result<(), Status> {
     let stop_req = cri::StopPodSandboxRequest {
         pod_sandbox_id: pod_id.clone()
     };
@@ -187,7 +183,7 @@ pub async fn remove_pod(rsc: &mut RuntimeServiceClient<Channel>, pod_id: String)
     return remove_resp;
 }
 
-pub async fn list_containers(rsc: &mut RuntimeServiceClient<Channel>) -> Result<cri::ListContainersResponse, Status> {
+pub async fn list_containers(mut rsc: RuntimeServiceClient<Channel>) -> Result<cri::ListContainersResponse, Status> {
     let list_req = cri::ListContainersRequest {
         filter: None
     };
@@ -196,7 +192,7 @@ pub async fn list_containers(rsc: &mut RuntimeServiceClient<Channel>) -> Result<
         .map(|m| m.into_inner())
 }
 
-pub async fn list_pods(rsc: &mut RuntimeServiceClient<Channel>) -> Result<cri::ListPodSandboxResponse, Status> {
+pub async fn list_pods(mut rsc: RuntimeServiceClient<Channel>) -> Result<cri::ListPodSandboxResponse, Status> {
     let list_req = cri::ListPodSandboxRequest {
         filter: None,
     };

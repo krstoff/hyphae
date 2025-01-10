@@ -1,6 +1,7 @@
-mod control_loop;
+mod common;
 mod operations;
 mod state;
+mod tasks;
 #[cfg(test)]
 mod tests;
 

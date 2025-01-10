@@ -1,177 +1,198 @@
-use k8s_cri::v1::ContainerEventResponse;
-use k8s_cri::v1 as cri;
+use crate::common::*;
 
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use std::collections::HashMap;
-
-fn to_state(i: i32) -> cri::ContainerState {
-    cri::ContainerState::try_from(i).unwrap()
+pub fn to_state(i: i32) -> cri::ContainerState {
+    i.try_into().unwrap()
 }
 
-// todo: newtype these
-type PodId = String;
-type CtrId = String;
-type Uid = String;
-type Name = String;
+#[derive(Clone)]
+pub struct CtrStatus {
+    id: CtrId,
+    state: cri::ContainerState,
+}
 
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct PodStatus {
-    ctrs: Vec<CtrId> // This is really only so we can propagate deletion events to State.ctrs, which we won't receive on pod deletion
+    id: PodId,
+    ctrs: HashMap<Name, CtrStatus>,
 }
 
-/// Something of a double indirection datastructure for keeping track of containerd's state
-/// pods and ctrs map ids to known statuses. These are populated first by ListContainers etc. and then only updated by events.
-/// uids and names map cluster names to actual containerd store objects. These are stitched together first by ListContainers
-/// and then it's up to control_loop to manage names and garbage collect potential dangling ones.
-/// Importantly, control_loop reads the pods and ctrs and executes operations to containerd but does NOT change the statuses. 
-/// We periodically poll the state of containerd in case someone came along and made pods under our noses.
+/// The current state of the node.
 pub struct State {
-    pub pods: HashMap<PodId, PodStatus>, // after initial list operations, ONLY ever populated by the event listener 
-    pub ctrs: HashMap<CtrId, cri::ContainerState>, // after initial list operations, ONLY ever populated by the event listener 
-    pub uids: HashMap<Uid, PodId>,       // after list op, only ever modified by control_loop
-    pub names: HashMap<(Uid, Name), CtrId> // after list op, only ever modified by control_loop
+    pub pods: HashMap<UID, PodStatus>
 }
-
-pub type StateHandle = Arc<Mutex<State>>;
 
 impl State {
-    pub fn new() -> Arc<Mutex<Self>> {
-        return Arc::new(Mutex::new(State {
-            pods: HashMap::new(),
-            ctrs: HashMap::new(),
-            uids: HashMap::new(),
-            names: HashMap::new(),
-        }))
-    }   
-
-    /// Ingest the result of ListContainers and ListPodSandbox into the state,
-    /// populating the name links as well.
-    pub fn observe(&mut self, containers: Vec<cri::Container>, pods: Vec<cri::PodSandbox>) {
-        let mut id_map: HashMap<PodId, Uid> = HashMap::new();
-        for pod in pods {
-            let metadata = pod.metadata.unwrap();
-            self.pods.insert(pod.id.clone(), PodStatus {
-                ctrs: vec![]
-            });
-            id_map.insert(pod.id.clone(), metadata.uid.clone());
-            self.uids.insert(metadata.uid, pod.id);
-        }
-        
-        for ctr in containers {
-            let metadata = ctr.metadata.unwrap();
-            let pod_uid = id_map.get(&ctr.pod_sandbox_id).unwrap().to_owned();
-            let pod_id = &ctr.pod_sandbox_id;
-            self.ctrs.insert(ctr.id.clone(), to_state(ctr.state));
-            self.names.insert((pod_uid, metadata.name), ctr.id.clone());
-            self.pods.get_mut(pod_id).unwrap().ctrs.push(ctr.id);
-        }
+    pub fn new() -> StateHandle {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        Arc::new(Mutex::new(State { pods: HashMap::new() }))
     }
 
-    // I had to experiment to figure out exactly what events are emitted during what combination of pod states and container events.
-    // This is where we update the runtime state, so that on the control_loop's next iteration it can react to state changes.
-    pub fn process_message(&mut self, message: ContainerEventResponse) {
-        use cri::ContainerEventType as CE;
-        use cri::ContainerState as CS;
-        fn to_event(i: i32) -> CE {
-            i.try_into().expect("Invalid container event type detected.")
-        }
-        let id = message.container_id.clone();
-        // when the metadata's pod_id and the event's id match, this is a Pod start event
-        if message.pod_sandbox_status.is_some() && message.pod_sandbox_status.as_ref().unwrap().id == id.clone() {
-            match to_event(message.container_event_type) {
-                CE::ContainerStartedEvent => {
-                    self.pods.insert(id.clone(), PodStatus{ ctrs: vec![] });
-                    // #[cfg(debug_assertions)]
-                    // println!("EVENT: PodStarted: {}", id.clone());
-                }
-                _ => {}
-            }
+    pub fn process_message(&mut self, message: cri::ContainerEventResponse) {
+        let id = message.container_id;
+        if message.pod_sandbox_status.is_none() { // Pod Deletion Event
+            self.pods.retain(|_, podstatus| { podstatus.id != id });
             return;
         }
-        // When the metadata is none and the container event type is deletion, this is a Pod deletion event
-        if message.pod_sandbox_status.is_none() {
-            match to_event(message.container_event_type) {
-                CE::ContainerDeletedEvent => {
-                    match self.pods.remove(&id) {
-                        None => {}
-                        Some(PodStatus{ ctrs }) => {
-                            // They're all gone, but we never received events for them.
-                            for ctr in ctrs {
-                                self.ctrs.remove(&ctr);
-                            }
-                        }
-                    }
-                    #[cfg(debug_assertions)]
-                    println!("EVENT: PodDeleted: {}", id.clone());
-                }
-                _ => {}
-            }
+        let sandbox = message.pod_sandbox_status.unwrap();
+        if &id == &sandbox.id { // Pod Creation event
+            self.pods.insert(
+                sandbox.metadata.unwrap().uid.clone(), 
+                PodStatus { id: id.clone(), ctrs: HashMap::new() }
+            );
             return;
         }
-        // This must be a container event.
-        let pod_id = message.pod_sandbox_status.unwrap().id;
-        let event_type = to_event(message.container_event_type);
-        match event_type {
-            CE::ContainerCreatedEvent => {
-                self.ctrs.insert(id.clone(), CS::ContainerCreated);
-                match self.pods.get_mut(&pod_id) {
-                    Some(pod_status) => {
-                        pod_status.ctrs.push(id.clone());
-                    }
-                    None => {}
-                }
-                #[cfg(debug_assertions)]
-                println!("EVENT: ContainerCreated: {}", id.clone());
-            }
-            CE::ContainerStartedEvent => {
-                self.ctrs.insert(id.clone(), CS::ContainerRunning);
-                #[cfg(debug_assertions)]
-                println!("EVENT: ContainerStarted: {}", id.clone());
-            }
-            CE::ContainerStoppedEvent => {
-                self.ctrs.insert(id.clone(), CS::ContainerExited);
-                #[cfg(debug_assertions)]
-                println!("EVENT: ContainerStopped: {}", id.clone());
-            }
-            CE::ContainerDeletedEvent => {
-                self.ctrs.remove(&id);
-                match self.pods.get_mut(&pod_id) {
-                    Some(pod_status) => {
-                        match pod_status.ctrs.iter().position(|r| r == &id ) {
-                            Some(i) => { pod_status.ctrs.swap_remove(i); }
-                            None => {}
-                        }
-                    }
-                    None => {} // pod mysteriously doesn't exist. oh well!
-                }
-                #[cfg(debug_assertions)]
-                println!("EVENT: ContainerDeleted: {}", id.clone());
-            }
+
+        // Just replace the whole pod state. The message contains everything.
+        let mut ctrs = HashMap::new();
+        for container in message.containers_statuses {
+            ctrs.insert(
+                container.metadata.unwrap().name,
+                CtrStatus { id: container.id, state: to_state(container.state) }
+            );
         }
+        let pod = PodStatus { id: sandbox.id.clone(), ctrs };
+        self.pods.entry(sandbox.metadata.unwrap().uid.clone())
+            .and_modify(|p| *p = pod.clone())
+            .or_insert(pod);
+    }
+
+    pub fn ingest(&mut self, containers: Vec<cri::Container>, pods: Vec<cri::PodSandbox>) {
+        todo!();
+        self.pods.clear();
     }
 }
 
-impl std::fmt::Debug for State {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        f.write_str("uids: ")?;
-        f.debug_map().entries(self.uids.iter()).finish()?;
-        f.write_str("\n")?;
+#[derive(Clone)]
+pub struct PodConfig {
+    pub config: SandBoxConfig,
+    pub containers: HashMap<Name, ContainerConfig>,
+}
 
-        f.write_str("pods: ")?;
-        f.debug_map().entries(self.pods.iter()).finish()?;
-        f.write_str("\n")?;
+/// The intended state of the node.
+pub struct Target {
+    pub pods: HashMap<UID, PodConfig>
+}
 
-        f.write_str("names: ")?;
-        f.debug_map().entries(self.names.iter()).finish()?;
-        f.write_str("\n")?;
-
-        f.write_str("ctrs: ")?;
-        f.debug_map().entries(self.ctrs.iter()).finish()?;
-        f.write_str("\n")?;
-        Ok(())
+impl Target {
+    pub fn new() -> Target {
+        Target { pods: HashMap::new() }
     }
 }
+
+pub enum PodStep {
+    CreatePod(SandBoxConfig),
+    ChangePod(HashMap<Name, ContainerStep>),
+    DeletePod(PodId),
+}
+
+pub enum ContainerStep {
+    CreateCtr(PodId, ContainerConfig, SandBoxConfig),
+    StartCtr(CtrId),
+    StopCtr(CtrId),
+    DeleteCtr(CtrId),
+}
+
+/// A tree of steps that will get us from State to Target
+pub struct Plan {
+    pub pods: HashMap<UID, PodStep>
+}
+fn diff(target: Target, state: State) -> Plan {
+    use PodStep::*;
+    use ContainerStep::*;
+    use cri::ContainerState as CS;
+    let mut plan = Plan { pods: HashMap::new() };
+
+    // Check that every pod in target exists in state
+    for (uid, podconfig) in target.pods.iter() {
+        if !state.pods.contains_key(uid) {
+            plan.pods.insert(
+                uid.clone(),
+                CreatePod (podconfig.config.clone())
+            );
+            continue;
+        }
+        let pod = state.pods.get(uid).unwrap();
+        let mut steps = HashMap::new();
+        // Check that every pod's container exists and is running
+        // TODO: This assumes that every container's desired state is RUNNING. Eventually we will support Jobs, whose desired state is EXITED with status code 0.
+        for (name, ctrconfig) in podconfig.containers.iter() {
+            let step = match pod.ctrs.get(name) {
+                None => CreateCtr(pod.id.clone(), ctrconfig.clone(), podconfig.config.clone()),
+                Some(&CtrStatus{ ref id, state: CS::ContainerCreated }) => StartCtr(id.clone()),
+                Some(&CtrStatus{ state: CS::ContainerRunning, .. }) => { continue; }
+                Some(&CtrStatus{ ref id, state: CS::ContainerExited }) => DeleteCtr(id.clone()),
+                Some(&CtrStatus{ state: CS::ContainerUnknown, .. }) => { continue; }
+            };
+            steps.insert(name.clone(), step);
+        }
+        if steps.len() > 0 {
+            plan.pods.insert(
+                uid.clone(),
+                ChangePod(steps)
+            );
+        }
+    }
+
+    // Check that every pod that is running is meant to be
+    for (uid, podstatus) in state.pods.iter() {
+        if !target.pods.contains_key(uid) {
+            // Check that every container is stopped first.
+            let mut steps = HashMap::new();
+            for (name, ctrstatus) in podstatus.ctrs.iter() {
+                let step = match ctrstatus {
+                    &CtrStatus { ref id, state: CS::ContainerRunning } => StopCtr(id.clone()),
+                    _ => { continue; }
+                };
+                steps.insert(name.clone(), step);
+            }
+            if steps.len() > 0 {
+                plan.pods.insert(uid.clone(), ChangePod(steps));
+            } else {
+                plan.pods.insert(uid.clone(), DeletePod(podstatus.id.clone()));
+            }
+            continue;
+        }
+        let target_pod = target.pods.get(uid).unwrap();
+        // Pod exists, but we have to be sure we're not running extra containers.
+        let mut steps = HashMap::new();
+        for (name, ctrstatus) in podstatus.ctrs.iter() {
+            if !target_pod.containers.contains_key(name) {
+                let step = match ctrstatus {
+                    &CtrStatus { ref id, state: CS::ContainerCreated } => DeleteCtr(id.clone()),
+                    &CtrStatus { ref id, state: CS::ContainerRunning } => StopCtr(id.clone()),
+                    &CtrStatus { ref id, state: CS::ContainerExited } => DeleteCtr(id.clone()),
+                    &CtrStatus { ref id, state: CS::ContainerUnknown } => { continue; }
+                };
+                steps.insert(name.clone(), step);
+            }
+        }
+        if steps.len() > 0 {
+            match plan.pods.get_mut(uid) {
+                None => {
+                    plan.pods.insert(uid.clone(), ChangePod(steps));
+                }
+                Some(&mut ChangePod(ref mut first_steps)) => {
+                    for (name, step) in steps {
+                        first_steps.insert(name, step);
+                    }
+                }
+                _ => unreachable!("Tried to add or delete containers to a pod marked for deletion.")
+            }
+        }
+    }
+
+    plan
+}
+
+// impl std::fmt::Debug for State {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+//         f.write_str("pods: ")?;
+//         f.debug_map().entries(self.pods.iter()).finish()?;
+//         f.write_str("\n")?;
+//         Ok(())
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
