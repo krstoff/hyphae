@@ -37,6 +37,8 @@ impl WorkTree {
 pub fn execute(plan: Plan, mut old_worktree: WorkTree, rsc: &mut RuntimeClient) -> WorkTree {
     use PodTask as PT;
     use PodStep as PS;
+    use ContainerStep as CS;
+    use ContainerTask as CT;
     let mut new_worktree = WorkTree { pods: HashMap::new() };
     for (uid, pod_step) in plan.pods {
         match (pod_step, old_worktree.pods.remove(&uid)) {
@@ -49,9 +51,12 @@ pub fn execute(plan: Plan, mut old_worktree: WorkTree, rsc: &mut RuntimeClient) 
             (PS::ChangePod(steps), Some(PT::ChangePod(mut old_tasks))) => {
                 let tasks = steps.into_iter()
                     .map(|(name, step)| {
-                        match old_tasks.remove(&name) {
-                            None => (name, step.spawn(rsc.clone())),
-                            Some(task) => (name, task),
+                        match (step, old_tasks.remove(&name)) {
+                            (CS::CreateCtr(..), Some(CT::CreateCtr(task))) => (name, CT::CreateCtr(task)),
+                            (CS::StartCtr(..), Some(CT::StartCtr(task))) => (name, CT::StartCtr(task)),
+                            (CS::StopCtr(..), Some(CT::StopCtr(task))) => (name, CT::StopCtr(task)),
+                            (CS::DeleteCtr(..), Some(CT::DeleteCtr(task))) => (name, CT::DeleteCtr(task)),
+                            (step, _) => (name, step.spawn(rsc.clone())),
                         }
                     })
                     .collect();

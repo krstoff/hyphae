@@ -3,7 +3,7 @@ pub use std::collections::HashMap;
 pub use std::time::Duration;
 pub use tokio::select;
 
-pub use crate::runtime::{SandBoxConfig, ContainerConfig, RuntimeClient};
+pub use crate::runtime::{SandBoxConfig, ContainerConfig, PodConfig, RuntimeClient};
 
 pub type UID = String;
 pub type PodId = String;

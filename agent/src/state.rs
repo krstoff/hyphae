@@ -4,13 +4,13 @@ pub fn to_state(i: i32) -> cri::ContainerState {
     i.try_into().unwrap()
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CtrStatus {
     id: CtrId,
     state: cri::ContainerState,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PodStatus {
     id: PodId,
     ctrs: HashMap<Name, CtrStatus>,
@@ -57,10 +57,10 @@ impl State {
 
     pub fn ingest(&mut self, containers: Vec<cri::Container>, pods: Vec<cri::PodSandbox>) {
         self.pods.clear();
-        let mut uids = HashMap::new();
+        let mut uids = HashMap::new(); // id -> uid
         for pod in pods {
             let uid = pod.metadata.unwrap().uid;
-            uids.insert(uid.clone(), pod.id.clone());
+            uids.insert(pod.id.clone(), uid.clone());
             self.pods.insert(uid, PodStatus { id: pod.id.clone(), ctrs: HashMap::new() });
         }
         for ctr in containers {
@@ -75,12 +75,6 @@ impl State {
     }
 }
 
-#[derive(Clone)]
-pub struct PodConfig {
-    pub config: SandBoxConfig,
-    pub containers: HashMap<Name, ContainerConfig>,
-}
-
 /// The intended state of the node.
 #[derive(Clone)]
 pub struct Target {
@@ -93,12 +87,14 @@ impl Target {
     }
 }
 
+#[derive(Clone, Debug)]
 pub enum PodStep {
     CreatePod(SandBoxConfig),
     ChangePod(HashMap<Name, ContainerStep>),
     DeletePod(PodId),
 }
 
+#[derive(Clone, Debug)]
 pub enum ContainerStep {
     CreateCtr(PodId, ContainerConfig, SandBoxConfig),
     StartCtr(CtrId),
@@ -199,14 +195,38 @@ pub fn diff(target: &Target, state: &State) -> Plan {
     plan
 }
 
-// impl std::fmt::Debug for State {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-//         f.write_str("pods: ")?;
-//         f.debug_map().entries(self.pods.iter()).finish()?;
-//         f.write_str("\n")?;
-//         Ok(())
-//     }
-// }
+impl std::fmt::Debug for Target {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        f.write_str("{")?;
+        for (uid, pod) in self.pods.iter() {
+            writeln!(f, "{}: {:?}\n", uid, pod)?;
+        }
+        f.write_str("}")?;
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        f.write_str("{")?;
+        for (uid, pod) in self.pods.iter() {
+            writeln!(f, "{}: {:?}\n", uid, pod)?;
+        }
+        f.write_str("}")?;
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for Plan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        f.write_str("{")?;
+        for (uid, pod) in self.pods.iter() {
+            writeln!(f, "{}: {:?}\n", uid, pod)?;
+        }
+        f.write_str("}")?;
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {

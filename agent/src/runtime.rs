@@ -3,11 +3,18 @@ use cri::runtime_service_client::RuntimeServiceClient;
 use k8s_cri::v1 as cri;
 use tonic::Status;
 use std::collections::HashMap;
+use crate::common::*;
 
 type RuntimeService = RuntimeServiceClient<tonic::transport::Channel>;
 type ImageService = ImageServiceClient<tonic::transport::Channel>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
+pub struct PodConfig {
+    pub config: SandBoxConfig,
+    pub containers: HashMap<String, ContainerConfig>,
+}
+
+#[derive(Clone, Debug)]
 pub struct SandBoxConfig {
     pub name: String,
     pub uid: String,
@@ -15,7 +22,7 @@ pub struct SandBoxConfig {
     pub namespace: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ContainerConfig {
     pub name: String,
     pub image: String,
@@ -165,6 +172,7 @@ impl RuntimeClient {
     }
     
     pub async fn start_container(&mut self, id: String) -> Result<(), Status> {
+        println!("Starting container: {}", id.clone());
         self.rsc.start_container(cri::StartContainerRequest { container_id: id })
             .await
             .map(|_| ())
