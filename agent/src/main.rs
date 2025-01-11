@@ -9,14 +9,15 @@ mod tests;
 use tokio::sync::mpsc::{ Receiver, Sender };
 use tokio::sync::watch::{Receiver as WatchRx, Sender as WatchTx};
 use tokio::task::JoinSet;
+use tokio::pin;
 
 use common::*;
 
 const CONTAINERD_SOCKET_PATH: &'static str = "/run/containerd/containerd.sock";
-const EVENTS_BUFFER_MAX: usize = 10_000;
-const CONTROL_LOOP_INTERVAL: Duration = Duration::from_millis(1_000);
+const EVENTS_BUFFER_MAX: usize = 100;
 const STATE_REFRESH_INTERVAL: Duration = Duration::from_millis(60_000);
-const EVENTS_REFRESH_INTERVAL: Duration = Duration::from_millis(3_000);
+const EVENTS_RETRY_INTERVAL: Duration = Duration::from_millis(5_000);
+const EVENTS_FLUSH_INTERVAL: Duration = Duration::from_millis(1000);
 const TARGET_REFRESH_INTERVAL: Duration = Duration::from_millis(15_000);
 
 async fn poll_for_target(mut _target_tx: WatchTx<state::Target>) -> Result<(), Error> {
@@ -25,28 +26,34 @@ async fn poll_for_target(mut _target_tx: WatchTx<state::Target>) -> Result<(), E
     }
 }
 
-async fn read_all_messages(runtime_service: &mut RuntimeClient) -> Vec<cri::ContainerEventResponse> {
-    // TODO: Refactor this to not open a connection every three seconds.. grpc streams can be open indefinitely
-    let mut events_resp = runtime_service.get_container_events()
-        .await
-        .expect("Could not get events stream.");
-    let mut messages = vec![];
-    while let Ok(Some(message)) = events_resp.message().await {
-        messages.push(message);
-    }
-    messages
-}
-
-async fn read_events(mut runtime_service: RuntimeClient, ctr_events: Sender<Vec<cri::ContainerEventResponse>>) -> Result<(), Error> {
+async fn read_events(mut rsc: RuntimeClient, ctr_events: Sender<Vec<cri::ContainerEventResponse>>) -> Result<(), Error> {
     loop {
-        let messages = read_all_messages(&mut runtime_service).await;
-        ctr_events.send(messages).await.expect("Channel suddenly dropped.");
-        tokio::time::sleep(EVENTS_REFRESH_INTERVAL).await;
+        let mut events_resp = rsc.get_container_events().await.unwrap();
+        let mut messages = vec![];
+        loop {
+            let timer = tokio::time::sleep(EVENTS_FLUSH_INTERVAL);
+            pin!(timer);
+            select! {
+                message = events_resp.message() => {
+                    match message {
+                        Ok(Some(message)) => {
+                            messages.push(message);
+                        }
+                        Ok(None) => {
+                            ctr_events.send(messages).await.expect("Events receiver was suddenly dropped.");
+                            messages = vec![];
+                        }
+                        _ => { break; }
+                    }
+                }
+                _ = &mut timer => {
+                    ctr_events.send(messages).await.expect("Events receiver was suddenly dropped.");
+                    messages = vec![];
+                }
+            }
+        }
+        tokio::time::sleep(EVENTS_RETRY_INTERVAL).await;
     }
-}
-
-async fn drain_messages(rsc: &mut RuntimeClient) {
-    let _ = read_all_messages(rsc).await;
 }
 
 async fn control_loop(
@@ -55,7 +62,6 @@ async fn control_loop(
     mut new_target: WatchRx<state::Target>
 
 ) -> Result<(), Error> {
-    drain_messages(&mut rsc).await;
     let mut target = state::Target::new();
     let mut state = state::State::new();
     let mut worktree = worktree::WorkTree::new();
@@ -70,6 +76,7 @@ async fn control_loop(
         select! {
             events = ctr_events.recv() => {
                 let events = events.expect("Events listener suddenly exited.");
+                if events.len() == 0 { continue; }
                 for event in events {
                     state.observe(event);
                 }
@@ -85,7 +92,6 @@ async fn control_loop(
         }
         let plan = state::diff(&target, &state);
         worktree = worktree::execute(plan, worktree, &mut rsc);
-        tokio::time::sleep(CONTROL_LOOP_INTERVAL).await;
     }
 }
 

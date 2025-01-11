@@ -74,7 +74,7 @@ impl SandBoxConfig {
 
 #[derive(Clone)]
 pub struct RuntimeClient {
-    rsc: RuntimeService,
+    pub rsc: RuntimeService,
     isc: ImageService,
 }
 
