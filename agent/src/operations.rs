@@ -1,6 +1,6 @@
 use cri::image_service_client::ImageServiceClient;
 use cri::runtime_service_client::RuntimeServiceClient;
-use k8s_cri::v1::{self as cri, Container, ContainerMetadata, KeyValue, LinuxContainerResources, LinuxSandboxSecurityContext, StopPodSandboxRequest};
+use k8s_cri::v1 as cri;
 use tonic::{transport::Channel, Status};
 use std::collections::HashMap;
 
@@ -14,7 +14,6 @@ pub struct SandBoxConfig {
 
 #[derive(Clone)]
 pub struct ContainerConfig {
-    pub pod_uid: String,
     pub name: String,
     pub image: String,
     pub command: String,
@@ -77,7 +76,7 @@ pub async fn pull_image(isc: &mut ImageServiceClient<Channel>, name: String) -> 
         .map(|m| m.into_inner())
 }
 
-pub async fn create_sandbox(mut rsc: RuntimeServiceClient<Channel>, config: SandBoxConfig) -> Result<(String, cri::PodSandboxConfig), Status> {
+pub async fn create_sandbox(mut rsc: RuntimeServiceClient<Channel>, config: SandBoxConfig) -> Result<String, Status> {
     let config = config.to_cri_config();
     let request = cri::RunPodSandboxRequest {
         config: Some(config.clone()),
@@ -85,7 +84,7 @@ pub async fn create_sandbox(mut rsc: RuntimeServiceClient<Channel>, config: Sand
     };
     return rsc.run_pod_sandbox(request)
         .await
-        .map(|m| (m.into_inner().pod_sandbox_id, config));
+        .map(|m| m.into_inner().pod_sandbox_id);
 }
 
 pub async fn create_container(mut rsc: RuntimeServiceClient<Channel>, pod_id: String, config: ContainerConfig, sandbox_config: SandBoxConfig)
@@ -106,7 +105,7 @@ pub async fn create_container(mut rsc: RuntimeServiceClient<Channel>, pod_id: St
         }),
     };
     let cri_container_config = cri::ContainerConfig {
-        metadata: Some(ContainerMetadata {
+        metadata: Some(cri::ContainerMetadata {
             name: config.name.clone(),
             attempt: 0,
         }),

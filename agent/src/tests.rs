@@ -1,29 +1,28 @@
 use crate::*;
 
 #[tokio::test]
-pub async fn setup_teardown() {
-    let channel = connect_uds("/run/containerd/containerd.sock".to_owned()).await.expect("Could not connect to containerd");
-    let mut image_service = ImageServiceClient::new(channel.clone());
+async fn setup_teardown() {
+    let channel = connect_uds().await.expect("Could not connect to containerd");
+    let mut image_service = ImageService::new(channel.clone());
     let image_name = "docker.io/library/nginx:latest".to_owned();
-    let pull_image_response = pull_image(&mut image_service, image_name).await;
+    let pull_image_response = operations::pull_image(&mut image_service, image_name.clone()).await.unwrap();
     println!("{:?}", &pull_image_response);
 
     fn make_uid() -> String {
         return "123456789".to_owned();
     }
     let uid = make_uid();
-    let mut runtime_service = RuntimeServiceClient::new(channel);
+    let mut rsc = RuntimeService::new(channel);
     let sandbox_config = SandBoxConfig {
         name: "nginx".to_owned(),
-        uid: uid,
+        uid: uid.clone(),
         namespace: "default".to_owned(),
         resources: None,
     };
-    let (create_sandbox_response, podsandbox_config) = create_sandbox(&mut runtime_service, sandbox_config).await;
-    println!("{:?}", &create_sandbox_response);
+    let pod_id = operations::create_sandbox(rsc.clone(), sandbox_config.clone()).await.unwrap();
+    println!("Created sandbox: {:?}", &pod_id);
 
     let container_config = ContainerConfig {
-        pod_sandbox_id: create_sandbox_response.pod_sandbox_id.clone(),
         name: "nginx-container".to_owned(),
         image: pull_image_response.image_ref.clone(),
         command: "nginx".to_owned(),
@@ -32,10 +31,9 @@ pub async fn setup_teardown() {
         envs: vec![],
         privileged: false
     };
-    let run_container_response = run_container(&mut runtime_service, container_config, podsandbox_config).await;
-    println!("{:?}", &run_container_response);
-
-    tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
-    let remove_response = remove_pod(&mut &mut runtime_service, create_sandbox_response.pod_sandbox_id).await;
+    let cid = operations::create_container(rsc.clone(), pod_id.clone(), container_config, sandbox_config).await.unwrap();
+    println!("Created container: {}", &cid);
+    operations::start_container(rsc.clone(), cid).await.unwrap();
+    let remove_response = operations::remove_pod(rsc.clone(), pod_id.clone()).await.unwrap();
     println!("{:?}", &remove_response);
 }

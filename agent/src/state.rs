@@ -22,13 +22,11 @@ pub struct State {
 }
 
 impl State {
-    pub fn new() -> StateHandle {
-        use std::sync::Arc;
-        use tokio::sync::Mutex;
-        Arc::new(Mutex::new(State { pods: HashMap::new() }))
+    pub fn new() -> State {
+        State { pods: HashMap::new() }
     }
 
-    pub fn process_message(&mut self, message: cri::ContainerEventResponse) {
+    pub fn observe(&mut self, message: cri::ContainerEventResponse) {
         let id = message.container_id;
         if message.pod_sandbox_status.is_none() { // Pod Deletion Event
             self.pods.retain(|_, podstatus| { podstatus.id != id });
@@ -58,8 +56,22 @@ impl State {
     }
 
     pub fn ingest(&mut self, containers: Vec<cri::Container>, pods: Vec<cri::PodSandbox>) {
-        todo!();
         self.pods.clear();
+        let mut uids = HashMap::new();
+        for pod in pods {
+            let uid = pod.metadata.unwrap().uid;
+            uids.insert(uid.clone(), pod.id.clone());
+            self.pods.insert(uid, PodStatus { id: pod.id.clone(), ctrs: HashMap::new() });
+        }
+        for ctr in containers {
+            let name = ctr.labels.get("name").unwrap().clone();
+            let pod_uid = uids.get(&ctr.pod_sandbox_id).unwrap();
+            let pod = self.pods.get_mut(pod_uid).unwrap();
+            pod.ctrs.insert(name, CtrStatus {
+                id: ctr.id,
+                state: to_state(ctr.state),
+            });
+        }
     }
 }
 
@@ -70,6 +82,7 @@ pub struct PodConfig {
 }
 
 /// The intended state of the node.
+#[derive(Clone)]
 pub struct Target {
     pub pods: HashMap<UID, PodConfig>
 }
@@ -97,7 +110,8 @@ pub enum ContainerStep {
 pub struct Plan {
     pub pods: HashMap<UID, PodStep>
 }
-fn diff(target: Target, state: State) -> Plan {
+
+pub fn diff(target: &Target, state: &State) -> Plan {
     use PodStep::*;
     use ContainerStep::*;
     use cri::ContainerState as CS;
@@ -162,7 +176,7 @@ fn diff(target: Target, state: State) -> Plan {
                     &CtrStatus { ref id, state: CS::ContainerCreated } => DeleteCtr(id.clone()),
                     &CtrStatus { ref id, state: CS::ContainerRunning } => StopCtr(id.clone()),
                     &CtrStatus { ref id, state: CS::ContainerExited } => DeleteCtr(id.clone()),
-                    &CtrStatus { ref id, state: CS::ContainerUnknown } => { continue; }
+                    &CtrStatus { id: _, state: CS::ContainerUnknown } => { continue; }
                 };
                 steps.insert(name.clone(), step);
             }
