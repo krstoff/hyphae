@@ -1,14 +1,9 @@
 pub use k8s_cri::v1 as cri;
 pub use std::collections::HashMap;
 pub use std::time::Duration;
-use cri::runtime_service_client::RuntimeServiceClient;
-use cri::image_service_client::ImageServiceClient;
 pub use tokio::select;
 
-pub type RuntimeService = RuntimeServiceClient<tonic::transport::Channel>;
-pub type ImageService = ImageServiceClient<tonic::transport::Channel>;
-
-pub use crate::operations::{SandBoxConfig, ContainerConfig};
+pub use crate::runtime::{SandBoxConfig, ContainerConfig, RuntimeClient};
 
 pub type UID = String;
 pub type PodId = String;

@@ -34,7 +34,7 @@ impl WorkTree {
 /// If we were already doing the task, move the task into the new worktree.
 /// Otherwise, spawn the new task. The rest of them simply get dropped on the floor,
 /// which triggers the cancel token. 
-pub fn execute(plan: Plan, mut old_worktree: WorkTree, rsc: &mut RuntimeService) -> WorkTree {
+pub fn execute(plan: Plan, mut old_worktree: WorkTree, rsc: &mut RuntimeClient) -> WorkTree {
     use PodTask as PT;
     use PodStep as PS;
     let mut new_worktree = WorkTree { pods: HashMap::new() };
@@ -66,10 +66,14 @@ pub fn execute(plan: Plan, mut old_worktree: WorkTree, rsc: &mut RuntimeService)
 }
 
 impl crate::state::PodStep {
-    fn spawn(self, rsc: RuntimeService) -> PodTask {
+    fn spawn(self, rsc: RuntimeClient) -> PodTask {
         match self {
             Self::CreatePod(config) => {
-                let ctor = move || { crate::operations::create_sandbox(rsc.clone(), config.clone()) };
+                let ctor = move || {
+                    let mut rsc = rsc.clone();
+                    let config = config.clone();
+                    async move { rsc.create_sandbox(config).await }
+                };
                 let task = Task::spawn(ctor, RestartPolicy::Always, CRI_RETRY_INTERVAL_MS);
                 PodTask::CreatePod(task)
             }
@@ -82,7 +86,11 @@ impl crate::state::PodStep {
                 PodTask::ChangePod(tasks)
             }
             Self::DeletePod(pod_id) => {
-                let ctor = move || { crate::operations::remove_pod(rsc.clone(), pod_id.clone()) };
+                let ctor = move || {
+                    let mut rsc = rsc.clone();
+                    let pod_id = pod_id.clone();
+                    async move { rsc.remove_pod(pod_id).await }
+                };
                 let task = Task::spawn(ctor, RestartPolicy::Always, CRI_RETRY_INTERVAL_MS);
                 PodTask::DeletePod(task)
             }
@@ -91,30 +99,46 @@ impl crate::state::PodStep {
 }
 
 impl crate::state::ContainerStep {
-    fn spawn(self, rsc: RuntimeService) -> ContainerTask {
+    fn spawn(self, rsc: RuntimeClient) -> ContainerTask {
         match self {
             Self::CreateCtr(pod_id, container_config, sandbox_config) => {
-                let ctor = move || { crate::operations::create_container(
-                    rsc.clone(),
-                    pod_id.clone(),
-                    container_config.clone(),
-                    sandbox_config.clone()
-                ) };
+                let ctor = move || { 
+                    let pod_id = pod_id.clone();
+                    let container_config = container_config.clone();
+                    let sandbox_config = sandbox_config.clone();
+                    let mut rsc = rsc.clone();
+                    async move {
+                       rsc.pull_image(container_config.image.clone()).await?;
+                       rsc.create_container(pod_id, container_config, sandbox_config).await
+                    }
+                };
                 let task = Task::spawn(ctor, RestartPolicy::Always, CRI_RETRY_INTERVAL_MS);
                 ContainerTask::CreateCtr(task)
             }
             Self::StartCtr(id) => {
-                let ctor = move || { crate::operations::start_container(rsc.clone(), id.clone()) };
+                let ctor = move || {
+                    let id = id.clone();
+                    let mut rsc = rsc.clone();
+                    async move { rsc.start_container(id).await }
+                };
                 let task = Task::spawn(ctor, RestartPolicy::Always, CRI_RETRY_INTERVAL_MS);
                 ContainerTask::StartCtr(task)
             },
             Self::StopCtr(id) => {
-                let ctor = move || { crate::operations::stop_container(rsc.clone(), id.clone()) };
+                let ctor = move || {
+                    let mut rsc = rsc.clone();
+                    let id = id.clone();
+                    async move { rsc.stop_container(id).await }
+                };
                 let task = Task::spawn(ctor, RestartPolicy::Always, CRI_RETRY_INTERVAL_MS);
                 ContainerTask::StopCtr(task)
             },
             Self::DeleteCtr(id) => {
-                let ctor = move || { crate::operations::remove_container(rsc.clone(), id.clone()) };
+                let ctor = move || {
+                    let id = id.clone();
+                    let mut rsc = rsc.clone();
+                    async move { rsc.remove_container(id).await }
+                };
                 let task = Task::spawn(ctor, RestartPolicy::Always, CRI_RETRY_INTERVAL_MS);
                 ContainerTask::DeleteCtr(task)
             },
