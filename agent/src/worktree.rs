@@ -17,6 +17,19 @@ enum ContainerTask {
     StartCtr(Task),
     StopCtr(Task),
     DeleteCtr(Task),
+    WaitCtr(Task), // If ctr state is unknown, let it stabilize first
+}
+
+impl ContainerTask {
+    fn into_inner(self) -> Task {
+        match self {
+            ContainerTask::CreateCtr(task) => task,
+            ContainerTask::StartCtr(task) => task,
+            ContainerTask::StopCtr(task) => task,
+            ContainerTask::DeleteCtr(task) => task,
+            ContainerTask::WaitCtr(task) => task,
+        }
+    }
 }
 
 /// A tree of Tasks executing the aforementioned plan
@@ -52,6 +65,7 @@ pub fn execute(plan: Plan, mut old_worktree: WorkTree, rsc: &mut RuntimeClient) 
                 let tasks = steps.into_iter()
                     .map(|(name, step)| {
                         match (step, old_tasks.remove(&name)) {
+                            (CS::WaitCtr(..), Some(ctr_task)) => (name, CT::WaitCtr(ctr_task.into_inner())),
                             (CS::CreateCtr(..), Some(CT::CreateCtr(task))) => (name, CT::CreateCtr(task)),
                             (CS::StartCtr(..), Some(CT::StartCtr(task))) => (name, CT::StartCtr(task)),
                             (CS::StopCtr(..), Some(CT::StopCtr(task))) => (name, CT::StopCtr(task)),
@@ -147,6 +161,13 @@ impl crate::state::ContainerStep {
                 let task = Task::spawn(ctor, RestartPolicy::Always, CRI_RETRY_INTERVAL_MS);
                 ContainerTask::DeleteCtr(task)
             },
+            Self::WaitCtr(_) => {
+                let ctor = || {
+                    async move { Ok::<(),tonic::Status>(()) }
+                };
+                let task = Task::spawn(ctor, RestartPolicy::Never, CRI_RETRY_INTERVAL_MS);
+                ContainerTask::WaitCtr(task)
+            }
         }
     }
 }

@@ -100,6 +100,7 @@ pub enum ContainerStep {
     StartCtr(CtrId),
     StopCtr(CtrId),
     DeleteCtr(CtrId),
+    WaitCtr(CtrId),
 }
 
 /// A tree of steps that will get us from State to Target
@@ -132,7 +133,7 @@ pub fn diff(target: &Target, state: &State) -> Plan {
                 Some(&CtrStatus{ ref id, state: CS::ContainerCreated }) => StartCtr(id.clone()),
                 Some(&CtrStatus{ state: CS::ContainerRunning, .. }) => { continue; }
                 Some(&CtrStatus{ ref id, state: CS::ContainerExited }) => DeleteCtr(id.clone()),
-                Some(&CtrStatus{ state: CS::ContainerUnknown, .. }) => { continue; }
+                Some(&CtrStatus{ ref id, state: CS::ContainerUnknown }) => WaitCtr(id.clone()),
             };
             steps.insert(name.clone(), step);
         }
@@ -172,7 +173,7 @@ pub fn diff(target: &Target, state: &State) -> Plan {
                     &CtrStatus { ref id, state: CS::ContainerCreated } => DeleteCtr(id.clone()),
                     &CtrStatus { ref id, state: CS::ContainerRunning } => StopCtr(id.clone()),
                     &CtrStatus { ref id, state: CS::ContainerExited } => DeleteCtr(id.clone()),
-                    &CtrStatus { id: _, state: CS::ContainerUnknown } => { continue; }
+                    &CtrStatus { ref id, state: CS::ContainerUnknown } => WaitCtr(id.clone()),
                 };
                 steps.insert(name.clone(), step);
             }
@@ -253,6 +254,9 @@ impl std::fmt::Debug for Plan {
                             }
                             DeleteCtr(id) => {
                                 writeln!(f, "        {}: DELETE {}", name, id)?;
+                            }
+                            WaitCtr(id) => {
+                                writeln!(f, "        {}: WAIT {}", name, id)?;
                             }
                         }
                     }

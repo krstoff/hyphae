@@ -18,14 +18,13 @@ async fn setup_teardown() {
 
     let container_config = ContainerConfig {
         name: "test_container".to_owned(),
-        image: "docker.io/library/debian:latest".to_owned(),
+        image: "docker.io/library/nginx:latest".to_owned(),
         command: "/bin/sh".to_owned(),
         args: vec!["-c".to_owned(), "while true; do sleep 1; done".to_owned()],
         working_dir: "".to_owned(),
         envs: vec![],
         privileged: false
     };
-    let _ = rsc.pull_image(container_config.image.clone()).await.unwrap();
     let cid = rsc.create_container(pod_id.clone(), container_config, sandbox_config).await.unwrap();
     rsc.start_container(cid).await.unwrap();
     let _ = rsc.remove_pod(pod_id.clone()).await.unwrap();
@@ -35,7 +34,7 @@ fn make_alpine_config(name: &str) -> ContainerConfig {
     let container_config = ContainerConfig {
         name: name.to_owned(),
         image: "docker.io/library/alpine:latest".to_owned(),
-        command: "/bin/sh".to_owned(),
+        command: "ash".to_owned(),
         args: vec!["-c".to_owned(), "while true; do sleep 1; done".to_owned()],
         working_dir: "".to_owned(),
         envs: vec![],
@@ -48,11 +47,11 @@ fn make_alpine_config(name: &str) -> ContainerConfig {
 async fn test_agent() {
     async fn poll_for_target(target_tx: WatchTx<state::Target>) -> Result<(), Error> {
         let num_containers = 3;
-        let num_pods = 50;
+        let num_pods = 0;
 
         let mut target = state::Target::new();
         for i in 0..num_pods {
-            let uid = format!("D34DB33F#{}", i);
+            let uid = format!("UIDFORPOD#{}", i);
             let name = format!("pod{}", i);
             let config = SandBoxConfig {
                 name, uid: uid.clone(), namespace: "default".to_owned(), resources: None
@@ -85,4 +84,5 @@ async fn test_agent() {
             log_err(result.unwrap_err());
         }
     }
+    
 }

@@ -97,8 +97,6 @@ async fn control_loop(
             }
         }
         let plan = state::diff(&target, &state);
-        dbg!(&target);
-        dbg!(&plan);
         worktree = worktree::execute(plan, worktree, &mut rsc);
     }
 }

@@ -2,14 +2,14 @@ use cri::image_service_client::ImageServiceClient;
 use cri::runtime_service_client::RuntimeServiceClient;
 use k8s_cri::v1::{self as cri, ListImagesRequest};
 use tonic::Status;
-use std::{collections::HashMap, ops::DerefMut};
+use std::{collections::HashMap};
 use tokio::sync::Semaphore;
 use crate::common::*;
 
 type RuntimeService = RuntimeServiceClient<tonic::transport::Channel>;
 type ImageService = ImageServiceClient<tonic::transport::Channel>;
 
-const MAX_CRI_CONCURRENCY: usize = 50;
+const MAX_CRI_CONCURRENCY: usize = 250;
 
 #[derive(Clone, Debug)]
 pub struct PodConfig {
@@ -94,49 +94,49 @@ impl RuntimeClient {
     }
     
     pub async fn create_sandbox(&mut self, config: SandBoxConfig) -> Result<String, Status> {
-        let _ticket = self.sem.acquire().await;
+        // let _ticket = self.sem.acquire().await;
         self.service.create_sandbox(config).await
     }
     
     pub async fn create_container(&mut self, pod_id: String, config: ContainerConfig, sandbox_config: SandBoxConfig)
         -> Result<String, Status>
     {
-        let _ticket = self.sem.acquire().await;
+        // let _ticket = self.sem.acquire().await;
         self.service.create_container(pod_id, config, sandbox_config).await
     }
     
     pub async fn start_container(&mut self, id: String) -> Result<(), Status> {
-        let _ticket = self.sem.acquire().await;
+        // let _ticket = self.sem.acquire().await;
         self.service.start_container(id).await
     }
     
     pub async fn stop_container(&mut self, container_id: String) -> Result<(), Status> {
-        let _ticket = self.sem.acquire().await;
+        // let _ticket = self.sem.acquire().await;
         self.service.stop_container(container_id).await
     }
     
     pub async fn remove_container(&mut self, container_id: String) -> Result<(), Status> {
-        let _ticket = self.sem.acquire().await;
+        // let _ticket = self.sem.acquire().await;
         self.service.remove_container(container_id).await
     }
     
     pub async fn remove_pod(&mut self, pod_id: String) -> Result<(), Status> {
-        let _ticket = self.sem.acquire().await;
+        // let _ticket = self.sem.acquire().await;
         self.service.remove_pod(pod_id).await
     }
     
     pub async fn list_containers(&mut self) -> Result<cri::ListContainersResponse, Status> {
-        let _ticket = self.sem.acquire().await;
+        // let _ticket = self.sem.acquire().await;
         self.service.list_containers().await
     }
     
     pub async fn list_pods(&mut self) -> Result<cri::ListPodSandboxResponse, Status> {
-        let _ticket = self.sem.acquire().await;
+        // let _ticket = self.sem.acquire().await;
         self.service.list_pods().await
     }
 
     pub async fn get_container_events(&mut self) -> Result<tonic::Streaming<cri::ContainerEventResponse>, tonic::Status> {
-        let _ticket = self.sem.acquire().await;
+        // let _ticket = self.sem.acquire().await;
         self.service.get_container_events().await
     }
 }
@@ -162,17 +162,6 @@ impl Cri {
             annotations: Default::default(),
             ..Default::default()
         };
-            
-        let mut response = self.isc.list_images(cri::ListImagesRequest{
-            filter: Some(cri::ImageFilter{
-                image: Some(spec.clone()),
-            })
-        }).await.map(|response| response.into_inner())?;
-
-        if response.images.len() > 0 {
-           return Ok(response.images.pop().unwrap().id);
-        }
-
         self.isc.pull_image(cri::PullImageRequest{
             image: Some(spec),
             auth: None,
