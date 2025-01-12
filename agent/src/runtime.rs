@@ -1,15 +1,14 @@
 use cri::image_service_client::ImageServiceClient;
 use cri::runtime_service_client::RuntimeServiceClient;
-use k8s_cri::v1::{self as cri, ListImagesRequest};
+use k8s_cri::v1 as cri;
 use tonic::Status;
-use std::{collections::HashMap};
 use tokio::sync::Semaphore;
 use crate::common::*;
 
 type RuntimeService = RuntimeServiceClient<tonic::transport::Channel>;
 type ImageService = ImageServiceClient<tonic::transport::Channel>;
 
-const MAX_CRI_CONCURRENCY: usize = 250;
+const MAX_IMAGE_PULL_CONCURRENCY: usize = 15;
 
 #[derive(Clone, Debug)]
 pub struct PodConfig {
@@ -77,71 +76,12 @@ impl SandBoxConfig {
 
 #[derive(Clone)]
 pub struct RuntimeClient {
-    service: Cri,
-    sem: Arc<Semaphore>,
-}
-
-#[derive(Clone)]
-pub struct Cri {
     rsc: RuntimeService,
     isc: ImageService,
+    sem: Arc<Semaphore>
 }
 
 impl RuntimeClient {
-    pub async fn pull_image(&mut self, name: String) -> Result<String, Status> {
-        let _ticket = self.sem.acquire().await;
-        self.service.pull_image(name).await
-    }
-    
-    pub async fn create_sandbox(&mut self, config: SandBoxConfig) -> Result<String, Status> {
-        // let _ticket = self.sem.acquire().await;
-        self.service.create_sandbox(config).await
-    }
-    
-    pub async fn create_container(&mut self, pod_id: String, config: ContainerConfig, sandbox_config: SandBoxConfig)
-        -> Result<String, Status>
-    {
-        // let _ticket = self.sem.acquire().await;
-        self.service.create_container(pod_id, config, sandbox_config).await
-    }
-    
-    pub async fn start_container(&mut self, id: String) -> Result<(), Status> {
-        // let _ticket = self.sem.acquire().await;
-        self.service.start_container(id).await
-    }
-    
-    pub async fn stop_container(&mut self, container_id: String) -> Result<(), Status> {
-        // let _ticket = self.sem.acquire().await;
-        self.service.stop_container(container_id).await
-    }
-    
-    pub async fn remove_container(&mut self, container_id: String) -> Result<(), Status> {
-        // let _ticket = self.sem.acquire().await;
-        self.service.remove_container(container_id).await
-    }
-    
-    pub async fn remove_pod(&mut self, pod_id: String) -> Result<(), Status> {
-        // let _ticket = self.sem.acquire().await;
-        self.service.remove_pod(pod_id).await
-    }
-    
-    pub async fn list_containers(&mut self) -> Result<cri::ListContainersResponse, Status> {
-        // let _ticket = self.sem.acquire().await;
-        self.service.list_containers().await
-    }
-    
-    pub async fn list_pods(&mut self) -> Result<cri::ListPodSandboxResponse, Status> {
-        // let _ticket = self.sem.acquire().await;
-        self.service.list_pods().await
-    }
-
-    pub async fn get_container_events(&mut self) -> Result<tonic::Streaming<cri::ContainerEventResponse>, tonic::Status> {
-        // let _ticket = self.sem.acquire().await;
-        self.service.get_container_events().await
-    }
-}
-
-impl Cri {
     pub async fn connect() -> Result<RuntimeClient, tonic::transport::Error> {
         use hyper_util::rt::TokioIo;
         use tokio::net::UnixStream;
@@ -153,8 +93,8 @@ impl Cri {
         ).await?;
         let rsc = RuntimeService::new(channel.clone());
         let isc = ImageService::new(channel.clone());
-        let sem = Arc::new(Semaphore::new(MAX_CRI_CONCURRENCY));
-        Ok(RuntimeClient { sem, service: Cri { rsc, isc, } })
+        let sem = Arc::new(Semaphore::new(MAX_IMAGE_PULL_CONCURRENCY));
+        Ok(RuntimeClient { rsc, isc, sem })
     }
     pub async fn pull_image(&mut self, name: String) -> Result<String, Status> {
         let spec = cri:: ImageSpec {
@@ -172,6 +112,8 @@ impl Cri {
             Some(image) => { return Ok(image.id); }
             None => {}
         }
+
+        let _ticket = self.sem.acquire().await.unwrap();
 
         self.isc.pull_image(cri::PullImageRequest{
             image: Some(spec),

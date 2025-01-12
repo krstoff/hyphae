@@ -5,7 +5,7 @@ async fn setup_teardown() {
     fn make_uid() -> String {
         return "123456789".to_owned();
     }
-    let mut rsc = Cri::connect().await.unwrap();
+    let mut rsc = RuntimeClient::connect().await.unwrap();
 
     let uid = make_uid();
     let sandbox_config = SandBoxConfig {
@@ -33,7 +33,7 @@ async fn setup_teardown() {
 fn make_alpine_config(name: &str) -> ContainerConfig {
     let container_config = ContainerConfig {
         name: name.to_owned(),
-        image: "docker.io/library/alpine:latest".to_owned(),
+        image: "docker.io/library/alpine:3.21.2".to_owned(),
         command: "ash".to_owned(),
         args: vec!["-c".to_owned(), "while true; do sleep 1; done".to_owned()],
         working_dir: "".to_owned(),
@@ -51,7 +51,7 @@ async fn test_agent() {
 
         let mut target = state::Target::new();
         for i in 0..num_pods {
-            let uid = format!("{}", i);
+            let uid = format!("#{}", i);
             let name = format!("pod{}", i);
             let config = SandBoxConfig {
                 name, uid: uid.clone(), namespace: "default".to_owned(), resources: None
@@ -69,7 +69,7 @@ async fn test_agent() {
             tokio::time::sleep(Duration::from_millis(1_000)).await;
         }
     }
-    let runtime = Cri::connect().await.expect("Could not connect to containerd.");
+    let runtime = RuntimeClient::connect().await.expect("Could not connect to containerd.");
     let mut set = JoinSet::new();
     let (events_tx, events_rx) = tokio::sync::mpsc::channel(EVENTS_BUFFER_MAX);
     let (target_tx, target_rx) = tokio::sync::watch::channel(state::Target::new());

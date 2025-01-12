@@ -103,7 +103,7 @@ async fn control_loop(
 }
 
 async fn agent() {
-    let runtime = Cri::connect().await.expect("Could not connect to containerd.");
+    let runtime = RuntimeClient::connect().await.expect("Could not connect to containerd.");
     let mut set = JoinSet::new();
     let (events_tx, events_rx) = tokio::sync::mpsc::channel(EVENTS_BUFFER_MAX);
     let (target_tx, target_rx) = tokio::sync::watch::channel(state::Target::new());
