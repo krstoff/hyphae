@@ -162,6 +162,17 @@ impl Cri {
             annotations: Default::default(),
             ..Default::default()
         };
+
+        let status = self.isc.image_status(cri::ImageStatusRequest {
+            image: Some(spec.clone()),
+            verbose: false,
+        }).await.map(|m| m.into_inner())?;
+
+        match status.image {
+            Some(image) => { return Ok(image.id); }
+            None => {}
+        }
+
         self.isc.pull_image(cri::PullImageRequest{
             image: Some(spec),
             auth: None,

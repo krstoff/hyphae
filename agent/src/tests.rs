@@ -51,7 +51,7 @@ async fn test_agent() {
 
         let mut target = state::Target::new();
         for i in 0..num_pods {
-            let uid = format!("UIDFORPOD#{}", i);
+            let uid = format!("{}", i);
             let name = format!("pod{}", i);
             let config = SandBoxConfig {
                 name, uid: uid.clone(), namespace: "default".to_owned(), resources: None
