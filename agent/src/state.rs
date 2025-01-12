@@ -197,33 +197,74 @@ pub fn diff(target: &Target, state: &State) -> Plan {
 
 impl std::fmt::Debug for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        f.write_str("{")?;
+        writeln!(f, "Target: {{")?;
         for (uid, pod) in self.pods.iter() {
-            writeln!(f, "{}: {:?}\n", uid, pod)?;
+            writeln!(f, "    {}: {{", uid)?;
+            writeln!(f, "        <name>: {}", pod.config.name)?;
+            for (name, ctr) in pod.containers.iter() {
+                writeln!(f, "        {}: {}", name, ctr.image)?;
+            }
+            writeln!(f, "    }}")?;
         }
-        f.write_str("}")?;
+        writeln!(f, "}}")?;
         Ok(())
     }
 }
 
 impl std::fmt::Debug for State {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        f.write_str("{")?;
+        writeln!(f, "State: {{")?;
         for (uid, pod) in self.pods.iter() {
-            writeln!(f, "{}: {:?}\n", uid, pod)?;
+            writeln!(f, "    {}: {{", uid)?;
+            writeln!(f, "        <id>: {}", pod.id)?;
+            for (name, ctr) in pod.ctrs.iter() {
+                writeln!(f, "        {}: ({}, {:?})", name, ctr.id, ctr.state)?;
+            }
+            writeln!(f, "    }}")?;
         }
-        f.write_str("}")?;
+        writeln!(f, "}}")?;
         Ok(())
     }
 }
 
 impl std::fmt::Debug for Plan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        f.write_str("{")?;
+        use PodStep::*;
+        use ContainerStep::*;
+        writeln!(f, "Plan: {{")?;
         for (uid, pod) in self.pods.iter() {
-            writeln!(f, "{}: {:?}\n", uid, pod)?;
+            write!(f, "    {}:", uid)?;
+            match pod {
+                &CreatePod(ref config) => {
+                    writeln!(f, "CREATEPOD {}", &config.name)?;
+                }
+                &ChangePod(ref ctrs) => {
+                    writeln!(f, "CHANGEPOD {{")?;
+                    for (name, ctr) in ctrs.iter() {
+                        match ctr.clone() {
+                            CreateCtr(_id, config, ..) => {
+                                writeln!(f, "        {}: CREATE {}", name, config.image)?;
+                            }
+                            StartCtr(id) => {
+                                writeln!(f, "        {}: START {}", name, id)?;
+                            }
+                            StopCtr(id) => {
+                                writeln!(f, "        {}: STOP {}", name, id)?;   
+                            }
+                            DeleteCtr(id) => {
+                                writeln!(f, "        {}: DELETE {}", name, id)?;
+                            }
+                        }
+                    }
+                    writeln!(f, "    }}")?;
+                }
+                &DeletePod(ref id) => {
+                    writeln!(f, "DELETE_POD {}", id)?;
+                }
+            }
+
         }
-        f.write_str("}")?;
+        writeln!(f, "}}")?;
         Ok(())
     }
 }

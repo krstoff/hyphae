@@ -15,9 +15,9 @@ use common::*;
 
 const CONTAINERD_SOCKET_PATH: &'static str = "/run/containerd/containerd.sock";
 const EVENTS_BUFFER_MAX: usize = 100;
-const STATE_REFRESH_INTERVAL: Duration = Duration::from_millis(60_000);
+const STATE_REFRESH_INTERVAL: Duration = Duration::from_millis(20_000);
 const EVENTS_RETRY_INTERVAL: Duration = Duration::from_millis(5_000);
-const EVENTS_FLUSH_INTERVAL: Duration = Duration::from_millis(1000);
+const EVENTS_FLUSH_INTERVAL: Duration = Duration::from_millis(4_000);
 const TARGET_REFRESH_INTERVAL: Duration = Duration::from_millis(15_000);
 
 async fn poll_for_target(mut _target_tx: WatchTx<state::Target>) -> Result<(), Error> {
@@ -26,6 +26,12 @@ async fn poll_for_target(mut _target_tx: WatchTx<state::Target>) -> Result<(), E
     }
 }
 
+// There is low hanging fruit here for improvements in managing the amount of work done by the control loop and
+// also managing the level of concurrency. For instance, because events happen to pods and contain the entire 
+// state of the pod, they can be coalesced by pod, resulting in one message per pod for burst scenarios.
+// Additionally, the number of messages sent to the control loop can be capped and the rest can be buffered.
+// The latter is not a major concern for services that don't utilize much cpu anyway but later, for batch jobs,
+// doing too much work in the agent can result in not enough cpu left over for jobs.
 async fn read_events(mut rsc: RuntimeClient, ctr_events: Sender<Vec<cri::ContainerEventResponse>>) -> Result<(), Error> {
     loop {
         let mut events_resp = rsc.get_container_events().await.unwrap();
@@ -91,12 +97,14 @@ async fn control_loop(
             }
         }
         let plan = state::diff(&target, &state);
+        dbg!(&target);
+        dbg!(&plan);
         worktree = worktree::execute(plan, worktree, &mut rsc);
     }
 }
 
 async fn agent() {
-    let runtime = RuntimeClient::connect().await.expect("Could not connect to containerd.");
+    let runtime = Cri::connect().await.expect("Could not connect to containerd.");
     let mut set = JoinSet::new();
     let (events_tx, events_rx) = tokio::sync::mpsc::channel(EVENTS_BUFFER_MAX);
     let (target_tx, target_rx) = tokio::sync::watch::channel(state::Target::new());

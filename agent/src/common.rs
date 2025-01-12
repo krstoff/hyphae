@@ -2,8 +2,9 @@ pub use k8s_cri::v1 as cri;
 pub use std::collections::HashMap;
 pub use std::time::Duration;
 pub use tokio::select;
+pub use std::sync::Arc;
 
-pub use crate::runtime::{SandBoxConfig, ContainerConfig, PodConfig, RuntimeClient};
+pub use crate::runtime::{SandBoxConfig, ContainerConfig, PodConfig, RuntimeClient, Cri};
 
 pub type UID = String;
 pub type PodId = String;

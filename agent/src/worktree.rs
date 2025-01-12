@@ -4,7 +4,7 @@ use crate::{
     state::*,
 };
 
-const CRI_RETRY_INTERVAL_MS: u64 = 200;
+const CRI_RETRY_INTERVAL_MS: u64 = 3000;
 
 enum PodTask {
     CreatePod(Task),
