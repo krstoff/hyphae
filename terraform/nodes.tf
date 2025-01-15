@@ -23,6 +23,7 @@ data "aws_ami" "hyphae-node-image" {
 resource "aws_network_interface" "node-eni" {
   count = var.node_count
   subnet_id = aws_subnet.node-subnet.id
+  ipv6_address_count = 1
 }
 
 resource "aws_network_interface" "container-eni" {
