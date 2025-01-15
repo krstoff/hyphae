@@ -15,7 +15,7 @@ source "amazon-ebs" "alpine" {
   region        = "us-west-1"
   source_ami_filter {
     filters = {
-      name                = "alpine-3.20.*-x86_64-uefi-cloudinit-r0"
+      name                = "alpine-3.21.*-x86_64-uefi-cloudinit-r0"
       root-device-type    = "ebs"
       virtualization-type = "hvm"
     }
