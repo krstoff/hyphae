@@ -15,12 +15,12 @@ source "amazon-ebs" "alpine" {
   region        = "us-west-1"
   source_ami_filter {
     filters = {
-      name                = "alpine-3.21.2-x86_64-uefi-cloudinit-r0"
+      name                = " amzn2-ami-hvm-2.0.20250108.0-x86_64"
       root-device-type    = "ebs"
       virtualization-type = "hvm"
     }
     most_recent = true
-    owners      = ["538276064493"]
+    owners      = ["137112412989"]
   }
   ssh_username = "alpine"
 }
