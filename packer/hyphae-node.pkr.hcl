@@ -31,6 +31,16 @@ build {
     "source.amazon-ebs.al2"
   ]
 
+  provisioner "file" {
+    source = "rt_tables"
+    destination = "/etc/iproute2/rt_tables"
+  }
+
+  provisioner "file" {
+    source = "10-containers.network"
+    destination = "/etc/systemd/10-containers.network"
+  }
+
   provisioner "shell" {
     script = "install-deps.sh"
   }

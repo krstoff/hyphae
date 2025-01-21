@@ -28,7 +28,6 @@ resource "aws_internet_gateway" "igw" {
 resource "aws_subnet" "node-subnet" {
   vpc_id = aws_vpc.cluster-vpc.id
   cidr_block = "10.0.0.0/20"
-  assign_ipv6_address_on_creation = true
   map_public_ip_on_launch = true
 
   # the important part. this is prefix::0:0/64
@@ -36,19 +35,6 @@ resource "aws_subnet" "node-subnet" {
 
   tags = {
     Name = "node-subnet"
-  }
-}
-
-resource "aws_subnet" "container-subnet" {
-  vpc_id = aws_vpc.cluster-vpc.id
-  cidr_block = "10.0.32.0/20"
-  assign_ipv6_address_on_creation = true
-  map_public_ip_on_launch = true
-
-  ipv6_cidr_block = cidrsubnet(aws_vpc.cluster-vpc.ipv6_cidr_block, 8, 1)
-
-  tags = {
-    Name = "container-subnet"
   }
 }
 
