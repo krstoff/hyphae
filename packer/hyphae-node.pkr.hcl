@@ -41,6 +41,11 @@ build {
     destination = "/tmp/10-containers.network"
   }
 
+  provisioner "file" {
+    source = "../agent/target/release/hyphae-agent"
+    destination = "/tmp/hyphae-agent"
+  }
+
   provisioner "shell" {
     script = "install-deps.sh"
   }
