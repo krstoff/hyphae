@@ -33,12 +33,12 @@ build {
 
   provisioner "file" {
     source = "rt_tables"
-    destination = "/etc/iproute2/rt_tables"
+    destination = "/tmp/rt_tables"
   }
 
   provisioner "file" {
     source = "10-containers.network"
-    destination = "/etc/systemd/10-containers.network"
+    destination = "/tmp/10-containers.network"
   }
 
   provisioner "shell" {

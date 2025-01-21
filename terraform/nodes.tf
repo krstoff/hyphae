@@ -56,18 +56,19 @@ resource "aws_instance" "node" {
 
   write_files:
     - content: |
-    {
-      "name": "container-network",
-      "type": "ipvlan",
-      "master": "ens6",
-      "mode": "l3",
-      "ipam": {
-        "type": "host-local",
-        "routes": [
-          { "dst": "::/0" }
-        ],
-        "subnet": "${one(aws_network_interface.container-eni[count.index].ipv6_prefixes)}"
-      }
-    }
+        {
+          "name": "container-network",
+          "type": "ipvlan",
+          "master": "ens6",
+          "mode": "l3",
+          "ipam": {
+            "type": "host-local",
+            "routes": [
+              { "dst": "::/0" }
+            ],
+            "subnet": "${one(aws_network_interface.container-eni[count.index].ipv6_prefixes)}"
+          }
+        }
+      path: "/etc/cni/net.d/10-ipvlan.conf"
   EOF
 }
