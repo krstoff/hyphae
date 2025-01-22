@@ -3,8 +3,6 @@ variable "node_count" {
   default = 0
 }
 
-variable "commit_id" {}
-
 output instances {
   value = {
     for index, node in aws_instance.node:
@@ -15,8 +13,9 @@ output instances {
 data "aws_ami" "hyphae-node-image" {
   filter {
     name   = "name"
-    values = ["hyphae-node-${var.commit_id}"]
+    values = ["hyphae-node-0.2"]
   }
+  most_recent = true
   owners = ["055838255245"]
 }
 

@@ -1,0 +1,11 @@
+#!/bin/bash
+set -euo pipefail
+
+pushd agent/
+cargo build --release
+popd
+
+_key="~/downloads/skeleton-key.pem"
+
+scp -i $_key ./agent/target/release/hyphae-agent ec2-user@[$1]:/tmp/
+ssh -i $_key ec2-user@"$1" sudo cp /tmp/hyphae-agent /usr/local/bin/

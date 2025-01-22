@@ -7,10 +7,8 @@ packer {
   }
 }
 
-variable "commit-id" {}
-
 source "amazon-ebs" "al2" {
-  ami_name      = "hyphae-node-${var.commit-id}"
+  ami_name      = "hyphae-node-0.2"
   instance_type = "t3.micro"
   region        = "us-west-1"
   source_ami_filter {
@@ -39,11 +37,6 @@ build {
   provisioner "file" {
     source = "10-containers.network"
     destination = "/tmp/10-containers.network"
-  }
-
-  provisioner "file" {
-    source = "../agent/target/release/hyphae-agent"
-    destination = "/tmp/hyphae-agent"
   }
 
   provisioner "shell" {
