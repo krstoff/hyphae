@@ -6,6 +6,13 @@ cargo build --release
 popd
 
 _key="~/downloads/skeleton-key.pem"
+if [[ "$#" -lt 1 ]]; then
+  pushd terraform
+  address=$(terraform output -json | jq -r '.instances.value | to_entries | map(.value) [0]')
+  popd
+else
+  address=$1
+fi
 
-scp -i $_key ./agent/target/release/hyphae-agent ec2-user@[$1]:/tmp/
-ssh -i $_key ec2-user@"$1" sudo cp /tmp/hyphae-agent /usr/local/bin/
+scp -i $_key ./agent/target/release/hyphae-agent ec2-user@[$address]:/tmp/
+ssh -i $_key ec2-user@"$address" sudo cp /tmp/hyphae-agent /usr/local/bin/

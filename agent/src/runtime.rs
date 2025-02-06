@@ -51,7 +51,7 @@ impl SandBoxConfig {
             resources: self.resources,
             security_context: Some(cri::LinuxSandboxSecurityContext {
                 namespace_options: Some(cri::NamespaceOption {
-                    network: cri::NamespaceMode::Node.into(),
+                    network: cri::NamespaceMode::Pod.into(),
                     ..Default::default()
                 }),
                 ..Default::default()   
@@ -148,7 +148,7 @@ impl RuntimeClient {
             security_context: Some(cri::LinuxContainerSecurityContext {
                 privileged: config.privileged,
                 namespace_options: Some(cri::NamespaceOption {
-                    network: cri::NamespaceMode::Node.into(),
+                    network: cri::NamespaceMode::Pod.into(),
                     ..Default::default()
                 }),
                 ..Default::default()   
